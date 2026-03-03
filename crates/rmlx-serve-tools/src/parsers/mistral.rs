@@ -1,17 +1,45 @@
 //! Mistral-style tool call parser.
 //!
 //! Detects `[TOOL_CALLS]` followed by a JSON array of tool calls.
+//! Format: `[TOOL_CALLS] [{"name": "func", "arguments": {...}}]`
+//!
+//! Tool call IDs are 9-character alphanumeric strings.
 
 use regex::Regex;
 use std::sync::LazyLock;
 use tracing::debug;
 
-use crate::parsers::utils::{extract_json_array, generate_tool_call_id, strip_think_tags};
+use crate::parsers::utils::{extract_json_array, strip_think_tags};
 use crate::tool_parser::ToolCallParser;
 use crate::types::{DeltaToolCall, ParsedToolCall, StreamingParseResult, ToolCallParseResult};
 
 static TOOL_CALLS_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?s)\[TOOL_CALLS\]\s*(.*)").unwrap());
+
+/// Generate a Mistral-style 9-character alphanumeric tool call ID.
+fn generate_mistral_tool_call_id() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    let count = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos() as u64;
+    let mixed = count
+        .wrapping_mul(6_364_136_223_846_793_005)
+        .wrapping_add(nanos);
+
+    // Generate a 9-character alphanumeric string
+    const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    let mut result = String::with_capacity(9);
+    let mut val = mixed;
+    for _ in 0..9 {
+        result.push(CHARS[(val % CHARS.len() as u64) as usize] as char);
+        val /= CHARS.len() as u64;
+    }
+    result
+}
 
 /// Parser for Mistral-style `[TOOL_CALLS]` blocks.
 pub struct MistralToolParser {
@@ -78,12 +106,13 @@ impl MistralToolParser {
                             serde_json::to_string(&args).unwrap_or_default()
                         };
 
-                        // Use the id from the JSON if present, otherwise generate one
+                        // Use the id from the JSON if present, otherwise generate
+                        // a Mistral-style 9-character alphanumeric ID
                         let id = obj
                             .get("id")
                             .and_then(|id| id.as_str())
                             .map(|s| s.to_string())
-                            .unwrap_or_else(generate_tool_call_id);
+                            .unwrap_or_else(generate_mistral_tool_call_id);
 
                         calls.push(ParsedToolCall {
                             id,
@@ -185,6 +214,10 @@ impl ToolCallParser for MistralToolParser {
         self.current_tool_count = 0;
         self.in_tool_call = false;
     }
+
+    fn supports_native_tool_format(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]
@@ -235,5 +268,24 @@ mod tests {
         let result = parser.parse(text);
         assert_eq!(result.tool_calls.len(), 1);
         assert_eq!(result.tool_calls[0].id, "call_123");
+    }
+
+    #[test]
+    fn test_generated_id_is_9_chars_alphanumeric() {
+        let id = generate_mistral_tool_call_id();
+        assert_eq!(id.len(), 9);
+        assert!(id.chars().all(|c| c.is_ascii_alphanumeric()));
+    }
+
+    #[test]
+    fn test_auto_generated_id_format() {
+        let parser = MistralToolParser::new();
+        let text = r#"[TOOL_CALLS] [{"name": "get_weather", "arguments": {"city": "London"}}]"#;
+        let result = parser.parse(text);
+        assert_eq!(result.tool_calls.len(), 1);
+        // Auto-generated ID should be 9 chars alphanumeric
+        let id = &result.tool_calls[0].id;
+        assert_eq!(id.len(), 9);
+        assert!(id.chars().all(|c| c.is_ascii_alphanumeric()));
     }
 }

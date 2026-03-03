@@ -59,7 +59,8 @@ pub async fn anthropic_messages(
         // Non-streaming: generate, convert via OpenAI format, then to Anthropic.
         let output = state.engine.generate(internal_request).await?;
         let created = unix_timestamp();
-        let chat_response = internal_to_chat_response(&output, &model, created, prompt_tokens);
+        let chat_response =
+            internal_to_chat_response(&output, &model, created, prompt_tokens, None, None);
         let anthropic_response = chat_response_to_anthropic(&chat_response);
         Ok(Json(anthropic_response).into_response())
     }

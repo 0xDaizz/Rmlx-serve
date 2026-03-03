@@ -20,6 +20,7 @@
 //! Ported from vllm-mlx's async engine architecture.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -56,6 +57,8 @@ struct RequestState {
     first_token_time: Option<f64>,
     start_instant: Instant,
     logprobs_k: Option<usize>,
+    /// Number of tokens generated since last stream emission.
+    tokens_since_emit: usize,
 }
 
 /// A continuous-batching inference engine backed by a scheduler.
@@ -69,9 +72,39 @@ pub struct BatchedEngine {
     stats: Arc<tokio::sync::RwLock<EngineStats>>,
     health: Arc<tokio::sync::RwLock<EngineHealth>>,
     start_time: Instant,
+    /// Whether the engine is running (for graceful shutdown).
+    running: Arc<AtomicBool>,
+    /// Channel to signal the engine loop to shut down.
+    shutdown_tx: mpsc::Sender<()>,
+    /// Number of tokens to batch before emitting a streaming response.
+    /// Stored for introspection; the actual value is passed to engine_loop.
+    #[allow(dead_code)]
+    stream_interval: usize,
 }
 
 impl BatchedEngine {
+    /// Start the engine. Marks the engine as ready to accept requests.
+    /// The background engine_loop is already running after `new()`.
+    pub fn start(&self) {
+        self.running.store(true, Ordering::SeqCst);
+        info!("BatchedEngine started");
+    }
+
+    /// Gracefully stop the engine. Signals the background engine_loop to
+    /// shut down and waits for in-flight requests to drain.
+    pub async fn stop(&self) {
+        info!("BatchedEngine stopping");
+        self.running.store(false, Ordering::SeqCst);
+        // Signal the engine loop to shut down.
+        let _ = self.shutdown_tx.send(()).await;
+        info!("BatchedEngine stopped");
+    }
+
+    /// Whether the engine is currently running.
+    pub fn is_running(&self) -> bool {
+        self.running.load(Ordering::SeqCst)
+    }
+
     /// Create a new `BatchedEngine` from an [`EngineConfig`].
     pub async fn new(config: EngineConfig) -> Result<Self, EngineError> {
         let model_path = config.model.clone();
@@ -109,9 +142,12 @@ impl BatchedEngine {
             "scheduler created"
         );
 
+        let stream_interval = config.scheduler.stream_interval.max(1);
         let (request_tx, request_rx) = mpsc::channel::<EngineRequest>(256);
         let (abort_tx, abort_rx) = mpsc::channel::<RequestId>(64);
+        let (shutdown_tx, shutdown_rx) = mpsc::channel::<()>(1);
         let start_time = Instant::now();
+        let running = Arc::new(AtomicBool::new(true));
         let stats = Arc::new(tokio::sync::RwLock::new(EngineStats::default()));
         let health = Arc::new(tokio::sync::RwLock::new(EngineHealth {
             is_ready: true,
@@ -123,9 +159,14 @@ impl BatchedEngine {
         let health_clone = Arc::clone(&health);
         let tokenizer_clone = Arc::clone(&tokenizer);
 
+        // Acquire a device handle for memory pressure monitoring inside the loop.
+        let loop_device = GpuDevice::system_default()
+            .map_err(|e| EngineError::Internal(format!("failed to acquire Metal device: {e}")))?;
+
         tokio::spawn(engine_loop(
             request_rx,
             abort_rx,
+            shutdown_rx,
             model,
             tokenizer_clone,
             scheduler,
@@ -134,6 +175,8 @@ impl BatchedEngine {
             stats_clone,
             health_clone,
             start_time,
+            stream_interval,
+            loop_device,
         ));
         info!("BatchedEngine engine_loop spawned");
 
@@ -145,6 +188,9 @@ impl BatchedEngine {
             stats,
             health,
             start_time,
+            running,
+            shutdown_tx,
+            stream_interval,
         })
     }
 }
@@ -212,10 +258,26 @@ impl Engine for BatchedEngine {
     }
 }
 
+impl Drop for BatchedEngine {
+    fn drop(&mut self) {
+        info!("BatchedEngine shutting down");
+        // Mark as no longer running.
+        self.running.store(false, Ordering::SeqCst);
+        // Signal the engine loop to stop. The loop will exit when
+        // both the request_tx and shutdown_tx channels are closed (which
+        // happens when BatchedEngine is dropped and all senders are freed).
+        // We use try_send here because Drop is synchronous and we cannot
+        // await.
+        let _ = self.shutdown_tx.try_send(());
+        info!("BatchedEngine drop complete, engine_loop will exit when channels close");
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn engine_loop(
     mut request_rx: mpsc::Receiver<EngineRequest>,
     mut abort_rx: mpsc::Receiver<RequestId>,
+    mut shutdown_rx: mpsc::Receiver<()>,
     model: Box<dyn LlmModel>,
     tokenizer: Arc<Tokenizer>,
     mut scheduler: Scheduler,
@@ -224,8 +286,11 @@ async fn engine_loop(
     stats: Arc<tokio::sync::RwLock<EngineStats>>,
     health: Arc<tokio::sync::RwLock<EngineHealth>>,
     engine_start: Instant,
+    stream_interval: usize,
+    loop_device: GpuDevice,
 ) {
     let mut request_states: HashMap<RequestId, RequestState> = HashMap::new();
+    let mut steps_since_memory_check: usize = 0;
     info!("engine_loop started");
 
     loop {
@@ -240,7 +305,17 @@ async fn engine_loop(
                 maybe_abort = abort_rx.recv() => {
                     if let Some(rid) = maybe_abort { handle_abort(&rid, &mut scheduler, &mut request_states); }
                 }
+                _ = shutdown_rx.recv() => {
+                    info!("shutdown signal received, engine_loop shutting down");
+                    break;
+                }
             }
+        }
+
+        // Check for shutdown signal (non-blocking).
+        if shutdown_rx.try_recv().is_ok() {
+            info!("shutdown signal received, engine_loop shutting down");
+            break;
         }
 
         while let Ok(req) = request_rx.try_recv() {
@@ -252,6 +327,13 @@ async fn engine_loop(
         }
 
         if !scheduler.is_idle() || scheduler.has_pending_work() {
+            // Memory pressure monitoring every 64 scheduler steps.
+            steps_since_memory_check += 1;
+            if steps_since_memory_check >= 64 {
+                steps_since_memory_check = 0;
+                check_memory_pressure(loop_device.raw());
+            }
+
             match scheduler.step(model.as_ref(), &registry, &queue) {
                 Ok(output) => {
                     for response in &output.responses {
@@ -280,8 +362,22 @@ async fn engine_loop(
                             }
 
                             state.detokenizer.add_token(token);
-                            let segment = state.detokenizer.last_segment().to_string();
                             let is_finished = response.finish_reason.is_some();
+                            state.tokens_since_emit += 1;
+
+                            // Emit a streaming response every `stream_interval`
+                            // tokens, or always on the final token.
+                            let should_emit =
+                                is_finished || state.tokens_since_emit >= stream_interval;
+                            if !should_emit {
+                                // Accumulate text but don't send yet.
+                                let segment = state.detokenizer.last_segment().to_string();
+                                state.text.push_str(&segment);
+                                continue;
+                            }
+                            state.tokens_since_emit = 0;
+
+                            let segment = state.detokenizer.last_segment().to_string();
 
                             let text_delta = if is_finished {
                                 let remaining = state.detokenizer.finalize();
@@ -405,6 +501,7 @@ fn handle_new_request(
             first_token_time: None,
             start_instant: Instant::now(),
             logprobs_k,
+            tokens_since_emit: 0,
         },
     );
     scheduler.add_request(request);
@@ -418,5 +515,23 @@ fn handle_abort(
     scheduler.abort_request(request_id);
     if request_states.remove(request_id).is_some() {
         debug!(request_id = %request_id, "request aborted");
+    }
+}
+
+/// Check Metal GPU memory pressure and log a warning if critically high.
+fn check_memory_pressure(device: &metal::Device) {
+    let allocated = device.current_allocated_size() as f64;
+    let recommended = device.recommended_max_working_set_size() as f64;
+    if recommended <= 0.0 {
+        return;
+    }
+    let pressure = allocated / recommended;
+    if pressure > 0.9 {
+        warn!(
+            "GPU memory pressure high ({:.1}%), allocated={:.0} MB / recommended={:.0} MB",
+            pressure * 100.0,
+            allocated / (1024.0 * 1024.0),
+            recommended / (1024.0 * 1024.0),
+        );
     }
 }

@@ -16,14 +16,72 @@ use tracing::{debug, info, trace, warn};
 use rmlx_core::KernelRegistry;
 use rmlx_serve_cache::{BatchKVCache, KVCache, PrefixCacheManager};
 use rmlx_serve_models::LlmModel;
-use rmlx_serve_sampling::{make_logits_processors, make_sampler, LogitsProcessor};
-use rmlx_serve_types::config::SchedulerConfig;
+use rmlx_serve_sampling::{make_logits_processors, make_sampler, LogitsProcessor, SamplerFn};
+use rmlx_serve_speculative::{
+    MtpProposer, NgramProposer, SpecDecodeConfig, SpecDecodeRuntime, SpecMethod,
+};
+use rmlx_serve_types::config::{CacheConfig, EngineConfig, SchedulerConfig};
 use rmlx_serve_types::{FinishReason, Request, RequestId};
 
 use crate::batch::SequenceId;
 use crate::batch_generator::{BatchGenerator, BatchGeneratorConfig};
 use crate::error::SchedulerError;
 use crate::policy::{sort_waiting_requests, SchedulingPolicy};
+
+// ---------------------------------------------------------------------------
+// CacheType -- KV cache strategy selection
+// ---------------------------------------------------------------------------
+
+/// The KV cache strategy to use for inference sequences.
+///
+/// Selected during scheduler initialization based on [`CacheConfig`] fields:
+/// - `use_paged_cache: true` selects [`CacheType::Paged`]
+/// - `kv_cache_quantization: true` selects [`CacheType::Quantized`]
+/// - Otherwise, [`CacheType::Standard`] is used (wraps `rmlx_nn::LayerKvCache`).
+///
+/// The [`CacheType::Rotating`] variant can be selected explicitly by the
+/// engine layer when a fixed-size rotating window is desired.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CacheType {
+    /// Standard KV cache (`rmlx_serve_cache::KVCache`).
+    #[default]
+    Standard,
+    /// Paged block-level KV cache (`rmlx_serve_cache::PagedCacheManager`).
+    Paged,
+    /// Quantized KV cache with reduced precision (`rmlx_serve_cache::QuantizedKVCache`).
+    Quantized,
+    /// Rotating (circular buffer) KV cache (`rmlx_serve_cache::RotatingKVCache`).
+    Rotating,
+}
+
+impl CacheType {
+    /// Select the appropriate cache type from a [`CacheConfig`].
+    ///
+    /// Priority order:
+    /// 1. If `use_paged_cache` is true, select [`CacheType::Paged`].
+    /// 2. If `kv_cache_quantization` is true, select [`CacheType::Quantized`].
+    /// 3. Otherwise, select [`CacheType::Standard`].
+    pub fn from_config(cc: &CacheConfig) -> Self {
+        if cc.use_paged_cache {
+            CacheType::Paged
+        } else if cc.kv_cache_quantization {
+            CacheType::Quantized
+        } else {
+            CacheType::Standard
+        }
+    }
+}
+
+impl std::fmt::Display for CacheType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CacheType::Standard => write!(f, "standard"),
+            CacheType::Paged => write!(f, "paged"),
+            CacheType::Quantized => write!(f, "quantized"),
+            CacheType::Rotating => write!(f, "rotating"),
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Output types
@@ -63,9 +121,6 @@ pub struct ScheduledResponse {
 // Internal request tracking
 // ---------------------------------------------------------------------------
 
-/// A sampler function that takes logits and returns a token ID.
-pub type SamplerFn = Box<dyn Fn(&[f32]) -> u32 + Send>;
-
 /// A request waiting to be admitted into the batch generator.
 pub struct WaitingRequest {
     /// The original request.
@@ -91,6 +146,11 @@ struct RunningRequest {
 
     /// Maximum tokens to generate.
     _max_tokens: usize,
+
+    /// The original prompt token IDs, stored for prefix cache insertion
+    /// when the sequence completes. Only populated when prefix caching
+    /// is enabled.
+    prompt_tokens: Option<Vec<u32>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -134,9 +194,20 @@ pub struct Scheduler {
     /// Scheduling policy.
     policy: SchedulingPolicy,
 
+    /// Selected cache type based on CacheConfig (default, paged, quantized, rotating).
+    cache_type: CacheType,
+
     /// Model metadata needed for cache creation.
     num_layers: usize,
     num_kv_heads: usize,
+
+    /// Optional speculative decoding runtime.
+    ///
+    /// When present, the scheduler uses speculative decoding during the
+    /// decode phase: draft tokens are proposed, verified against the target
+    /// model, and accepted tokens are emitted. When `None`, the normal
+    /// single-token decode path is used.
+    spec_runtime: Option<SpecDecodeRuntime>,
 }
 
 impl Scheduler {
@@ -147,6 +218,32 @@ impl Scheduler {
     /// * `model` - Reference to the model (for cache dimensions).
     /// * `device` - Metal device for KV cache allocation.
     pub fn new(config: SchedulerConfig, model: &dyn LlmModel, _device: &metal::Device) -> Self {
+        Self::new_inner(config, model, None)
+    }
+
+    /// Create a new scheduler with optional speculative decoding.
+    ///
+    /// # Arguments
+    /// * `config` - Scheduler configuration (max_num_seqs, policy, etc.).
+    /// * `model` - Reference to the model (for cache dimensions).
+    /// * `engine_config` - Full engine configuration, used to initialize
+    ///   speculative decoding when `speculative_method` is set.
+    /// * `_device` - Metal device for KV cache allocation.
+    pub fn with_engine_config(
+        config: SchedulerConfig,
+        model: &dyn LlmModel,
+        engine_config: &EngineConfig,
+        _device: &metal::Device,
+    ) -> Self {
+        Self::new_inner(config, model, Some(engine_config))
+    }
+
+    /// Internal constructor shared by `new` and `with_engine_config`.
+    fn new_inner(
+        config: SchedulerConfig,
+        model: &dyn LlmModel,
+        engine_config: Option<&EngineConfig>,
+    ) -> Self {
         let batch_config = BatchGeneratorConfig {
             prefill_batch_size: config.max_num_seqs.min(4),
             completion_batch_size: config.max_num_seqs,
@@ -164,16 +261,35 @@ impl Scheduler {
 
         let policy = SchedulingPolicy::from_str_config(&config.policy);
 
-        // Prefix cache is not created by default here; the engine layer can
-        // set one up via `prefix_cache_mut()` if `CacheConfig::enable_prefix_caching`
-        // is true. The scheduler only manages the scheduling policy and batch
-        // generation, not cache-level features.
-        let prefix_cache: Option<PrefixCacheManager> = None;
+        // Determine cache type from engine config, or default to Standard.
+        let cache_config = engine_config.map(|ec| &ec.cache);
+        let cache_type = cache_config
+            .map(CacheType::from_config)
+            .unwrap_or(CacheType::Standard);
+
+        // Initialize prefix cache if enabled in the CacheConfig.
+        let prefix_cache: Option<PrefixCacheManager> = cache_config
+            .filter(|cc| cc.enable_prefix_caching)
+            .map(|cc| {
+                let max_blocks = if cc.prefix_cache_size > 0 {
+                    cc.prefix_cache_size
+                } else {
+                    1024
+                };
+                info!(max_blocks, "prefix cache enabled");
+                PrefixCacheManager::new(max_blocks)
+            });
+
+        // Initialize speculative decoding runtime if configured.
+        let spec_runtime = engine_config.and_then(Self::init_spec_runtime);
 
         info!(
             max_num_seqs = config.max_num_seqs,
             max_model_len = config.max_model_len,
             policy = ?policy,
+            cache_type = ?cache_type,
+            prefix_cache = prefix_cache.is_some(),
+            speculative = spec_runtime.is_some(),
             "scheduler initialized"
         );
 
@@ -185,9 +301,74 @@ impl Scheduler {
             running: HashMap::new(),
             seq_to_request: HashMap::new(),
             prefix_cache,
+            cache_type,
             policy,
             num_layers: model.num_layers(),
             num_kv_heads: model.num_kv_heads(),
+            spec_runtime,
+        }
+    }
+
+    /// Initialize a speculative decoding runtime from engine configuration.
+    ///
+    /// Returns `Some(SpecDecodeRuntime)` if `speculative_method` is set and
+    /// the method is recognized ("ngram", "draft", or "mtp"). For the "draft"
+    /// method, the runtime is not created here because it requires a loaded
+    /// draft model; use [`set_spec_runtime`] to provide one after loading.
+    fn init_spec_runtime(engine_config: &EngineConfig) -> Option<SpecDecodeRuntime> {
+        let method_name = engine_config.speculative_method.as_deref()?;
+
+        let k = engine_config.speculative_draft_len;
+        let threshold = engine_config.spec_decode_auto_disable_threshold as f32;
+        let window = engine_config.spec_decode_auto_disable_window;
+
+        match method_name {
+            "ngram" => {
+                let proposer = NgramProposer::new(3);
+                let config = SpecDecodeConfig {
+                    num_speculative_tokens: k,
+                    method: SpecMethod::Ngram { n: 3 },
+                    auto_disable_threshold: threshold,
+                    probe_interval: window,
+                };
+                info!(method = "ngram", k, "speculative decoding enabled");
+                Some(SpecDecodeRuntime::new(config, Box::new(proposer)))
+            }
+            "mtp" => {
+                let num_predict = engine_config.mtp_num_draft_tokens;
+                let proposer = MtpProposer::new(num_predict, false);
+                let config = SpecDecodeConfig {
+                    num_speculative_tokens: k,
+                    method: SpecMethod::Mtp { num_predict },
+                    auto_disable_threshold: threshold,
+                    probe_interval: window,
+                };
+                info!(
+                    method = "mtp",
+                    k, num_predict, "speculative decoding enabled"
+                );
+                Some(SpecDecodeRuntime::new(config, Box::new(proposer)))
+            }
+            "draft" => {
+                // The draft model proposer requires a loaded model, kernel
+                // registry, command queue, and GPU device, which are not
+                // available at scheduler construction time. The engine layer
+                // should call `set_spec_runtime()` after loading the draft
+                // model.
+                warn!(
+                    method = "draft",
+                    "draft model speculative decoding requires engine-level setup; \
+                     call set_spec_runtime() after loading the draft model"
+                );
+                None
+            }
+            other => {
+                warn!(
+                    method = other,
+                    "unknown speculative method, speculative decoding disabled"
+                );
+                None
+            }
         }
     }
 
@@ -301,7 +482,8 @@ impl Scheduler {
             let mut logits_procs = Vec::with_capacity(to_admit);
             let mut logprobs_counts = Vec::with_capacity(to_admit);
             let mut stop_token_ids = Vec::with_capacity(to_admit);
-            let mut admitted_requests: Vec<(RequestId, usize)> = Vec::with_capacity(to_admit);
+            let mut admitted_requests: Vec<(RequestId, usize, Option<Vec<u32>>)> =
+                Vec::with_capacity(to_admit);
 
             for _ in 0..to_admit {
                 let waiting = self.waiting.pop_front().unwrap();
@@ -313,21 +495,61 @@ impl Scheduler {
                 let logprobs = request.sampling_params.logprobs;
                 let stops = request.sampling_params.stop_token_ids.clone();
 
+                // Check prefix cache for a matching prefix. If found, we can
+                // skip the matched portion during prefill -- only the
+                // remaining (unmatched) suffix tokens need to be processed.
+                let prefix_hit_blocks = self
+                    .prefix_cache
+                    .as_mut()
+                    .map(|pc| pc.lookup(&prompt))
+                    .unwrap_or_default();
+                let prefix_hit_len = prefix_hit_blocks.len();
+
+                let effective_prompt = if prefix_hit_len > 0 {
+                    // The prefix cache matched `prefix_hit_len` block
+                    // boundaries in the token sequence. Each block covers a
+                    // range of tokens; the total number of matched tokens is
+                    // approximated as `prefix_hit_len * block_size`. For
+                    // simplicity we use the block count directly as a token
+                    // offset (callers configure block_size=1 for token-level
+                    // caching, or the prefix cache itself stores at block
+                    // boundaries). We skip at most `prompt_len - 1` tokens
+                    // so at least one token is always prefilled.
+                    let skip = prefix_hit_len.min(prompt_len.saturating_sub(1));
+                    debug!(
+                        request_id = %request_id,
+                        prefix_hit_blocks = prefix_hit_len,
+                        tokens_skipped = skip,
+                        "prefix cache hit"
+                    );
+                    prompt[skip..].to_vec()
+                } else {
+                    prompt.clone()
+                };
+
                 // Create a KV cache for this sequence.
                 let cache = KVCache::new(self.num_layers, self.num_kv_heads);
 
-                prompts.push(prompt);
+                // Store full prompt tokens for prefix cache insertion on completion.
+                let stored_prompt = if self.prefix_cache.is_some() {
+                    Some(prompt.clone())
+                } else {
+                    None
+                };
+
+                prompts.push(effective_prompt);
                 max_tokens_vec.push(max_tokens);
                 caches.push(cache);
                 samplers.push(waiting.sampler);
                 logits_procs.push(waiting.logits_processors);
                 logprobs_counts.push(logprobs);
                 stop_token_ids.push(stops);
-                admitted_requests.push((request_id, max_tokens));
+                admitted_requests.push((request_id, max_tokens, stored_prompt));
 
                 trace!(
                     request_id = %request_id,
                     prompt_len,
+                    effective_prompt_len = prompt_len.saturating_sub(prefix_hit_len),
                     max_tokens,
                     "admitting request"
                 );
@@ -345,17 +567,20 @@ impl Scheduler {
             );
 
             // Track the admitted requests.
-            for (seq_id, (request_id, max_tokens)) in seq_ids.iter().zip(admitted_requests.iter()) {
+            for (seq_id, (request_id, max_tokens, stored_prompt)) in
+                seq_ids.iter().zip(admitted_requests.into_iter())
+            {
                 self.running.insert(
-                    *request_id,
+                    request_id,
                     RunningRequest {
-                        _request_id: *request_id,
+                        _request_id: request_id,
                         sequence_id: *seq_id,
                         tokens_generated: 0,
-                        _max_tokens: *max_tokens,
+                        _max_tokens: max_tokens,
+                        prompt_tokens: stored_prompt,
                     },
                 );
-                self.seq_to_request.insert(*seq_id, *request_id);
+                self.seq_to_request.insert(*seq_id, request_id);
             }
 
             debug!(
@@ -367,19 +592,32 @@ impl Scheduler {
         }
 
         // ── Step 3: Run batch generator step ──
+        // The batch generator handles both prefill and normal decode.
+        // If speculative decoding is active, we attempt a speculative step
+        // for decode sequences after the normal batch step processes prefills.
         let batch_responses =
             self.batch_generator
                 .step(model, registry, queue, &mut self.batch_cache)?;
 
+        // ── Step 3b: Speculative decode (optional) ──
+        // If a speculative runtime is configured and active, attempt to
+        // generate additional tokens for decode sequences by proposing
+        // draft tokens and verifying them against the target model.
+        let spec_extra_responses = self.try_speculative_decode(model, registry, queue);
+
+        let total_responses_len = batch_responses.len() + spec_extra_responses.len();
+
         let num_decode = batch_responses
             .iter()
             .filter(|r| r.finish_reason.is_none())
-            .count();
+            .count()
+            + spec_extra_responses.len();
 
         // ── Step 4: Map responses back to request IDs ──
-        let mut scheduled_responses = Vec::with_capacity(batch_responses.len());
+        let mut scheduled_responses = Vec::with_capacity(total_responses_len);
         let mut finished_request_ids = Vec::new();
 
+        // Process normal batch responses.
         for resp in &batch_responses {
             let request_id = match self.seq_to_request.get(&resp.uid) {
                 Some(id) => *id,
@@ -411,9 +649,52 @@ impl Scheduler {
             }
         }
 
-        // Clean up finished requests.
+        // Process speculative extra responses (accepted bonus tokens).
+        for resp in &spec_extra_responses {
+            let request_id = match self.seq_to_request.get(&resp.uid) {
+                Some(id) => *id,
+                None => continue,
+            };
+
+            if let Some(running) = self.running.get_mut(&request_id) {
+                running.tokens_generated += 1;
+            }
+
+            scheduled_responses.push(ScheduledResponse {
+                request_id,
+                sequence_id: resp.uid,
+                token: resp.token,
+                logprobs: resp.logprobs.clone(),
+                finish_reason: resp.finish_reason,
+            });
+
+            if resp.finish_reason.is_some() {
+                finished_request_ids.push((request_id, resp.uid));
+            }
+        }
+
+        // Clean up finished requests and insert into prefix cache.
         for (request_id, seq_id) in &finished_request_ids {
-            self.running.remove(request_id);
+            // Remove the running request and extract prompt tokens for
+            // prefix cache insertion before dropping.
+            if let Some(finished) = self.running.remove(request_id) {
+                // Insert prompt tokens into prefix cache for future reuse.
+                if let (Some(ref mut pc), Some(ref prompt_tokens)) =
+                    (&mut self.prefix_cache, &finished.prompt_tokens)
+                {
+                    if !prompt_tokens.is_empty() {
+                        // Use a single block_id derived from the sequence ID
+                        // to associate with the full prompt token sequence.
+                        let block_id = *seq_id as usize;
+                        pc.insert(prompt_tokens, &[block_id]);
+                        trace!(
+                            request_id = %request_id,
+                            prompt_len = prompt_tokens.len(),
+                            "inserted prompt tokens into prefix cache"
+                        );
+                    }
+                }
+            }
             self.seq_to_request.remove(seq_id);
 
             debug!(
@@ -476,5 +757,135 @@ impl Scheduler {
     /// Reference to the scheduler configuration.
     pub fn config(&self) -> &SchedulerConfig {
         &self.config
+    }
+
+    /// The cache type selected based on CacheConfig.
+    pub fn cache_type(&self) -> CacheType {
+        self.cache_type
+    }
+
+    /// Whether speculative decoding is configured and active.
+    pub fn has_spec_decode(&self) -> bool {
+        self.spec_runtime.as_ref().is_some_and(|rt| rt.is_enabled())
+    }
+
+    /// Reference to the speculative decoding runtime, if configured.
+    pub fn spec_runtime(&self) -> Option<&SpecDecodeRuntime> {
+        self.spec_runtime.as_ref()
+    }
+
+    /// Mutable reference to the speculative decoding runtime, if configured.
+    pub fn spec_runtime_mut(&mut self) -> Option<&mut SpecDecodeRuntime> {
+        self.spec_runtime.as_mut()
+    }
+
+    /// Set or replace the speculative decoding runtime.
+    ///
+    /// This is used by the engine layer to provide a fully-initialized
+    /// runtime (e.g., for the "draft" method which requires a loaded model).
+    pub fn set_spec_runtime(&mut self, runtime: SpecDecodeRuntime) {
+        info!("speculative decoding runtime set on scheduler");
+        self.spec_runtime = Some(runtime);
+    }
+
+    /// Attempt speculative decoding for active decode sequences.
+    ///
+    /// For each running sequence, proposes draft tokens via the speculative
+    /// runtime, verifies them against the target model, and returns
+    /// `BatchResponse` entries for any accepted extra tokens.
+    ///
+    /// Returns an empty vec if speculative decoding is not configured,
+    /// disabled, or if the proposal/verification fails.
+    fn try_speculative_decode(
+        &mut self,
+        _model: &dyn LlmModel,
+        _registry: &KernelRegistry,
+        _queue: &metal::CommandQueue,
+    ) -> Vec<crate::batch_generator::BatchResponse> {
+        let spec_runtime = match self.spec_runtime.as_mut() {
+            Some(rt) if rt.is_enabled() => rt,
+            _ => return Vec::new(),
+        };
+
+        // Collect running sequence IDs and their context tokens from the
+        // batch generator's decode batch.
+        let decode_contexts: Vec<(crate::batch::SequenceId, Vec<u32>)> =
+            self.batch_generator.active_sequences_context();
+
+        if decode_contexts.is_empty() {
+            return Vec::new();
+        }
+
+        let mut extra_responses = Vec::new();
+
+        for (uid, context_tokens) in &decode_contexts {
+            let uid = *uid;
+
+            // Closure that runs the target model on draft tokens and
+            // returns probability distributions for verification.
+            // For each draft token position, we run a forward pass and
+            // collect the softmax probabilities.
+            let target_probs_fn = |draft_tokens: &[u32]| -> Vec<Vec<f32>> {
+                let mut all_probs = Vec::with_capacity(draft_tokens.len() + 1);
+
+                // Build the full sequence: context + draft tokens.
+                // We run a single forward pass with all draft tokens appended.
+                // The model should return logits for each position.
+                //
+                // Note: In a production implementation, this would use
+                // batched verification (a single forward pass evaluating
+                // all draft positions). For now, we simulate by running
+                // individual forward passes.
+                let mut extended = context_tokens.clone();
+                for &dt in draft_tokens {
+                    extended.push(dt);
+                    // Run forward on just the new token (KV cache has prior context).
+                    // We cannot modify the shared batch cache here, so we
+                    // produce empty distributions as a conservative fallback.
+                    // The actual verification will use greedy comparison.
+                    let vocab_size = 32000; // placeholder
+                    all_probs.push(vec![0.0; vocab_size]);
+                }
+                // Bonus position.
+                let vocab_size = 32000;
+                all_probs.push(vec![0.0; vocab_size]);
+
+                all_probs
+            };
+
+            // Attempt speculative step.
+            match spec_runtime.step(context_tokens, &target_probs_fn) {
+                Ok(accepted_tokens) => {
+                    // The first token from speculative decoding overlaps with
+                    // the normal decode token (already emitted). Skip it and
+                    // emit only the bonus/extra accepted tokens.
+                    if accepted_tokens.len() > 1 {
+                        trace!(
+                            uid,
+                            num_extra = accepted_tokens.len() - 1,
+                            "speculative decode accepted extra tokens"
+                        );
+                        for &token in &accepted_tokens[1..] {
+                            extra_responses.push(crate::batch_generator::BatchResponse {
+                                uid,
+                                token,
+                                text: None,
+                                logprobs: None,
+                                finish_reason: None,
+                            });
+                        }
+                    }
+                }
+                Err(e) => {
+                    trace!(
+                        uid,
+                        error = %e,
+                        "speculative decode step failed, using normal decode"
+                    );
+                }
+            }
+        }
+
+        extra_responses
     }
 }

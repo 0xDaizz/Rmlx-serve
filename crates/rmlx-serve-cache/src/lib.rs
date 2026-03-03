@@ -17,6 +17,7 @@
 //! Prompt cache save/load utilities are provided via the [`prompt_cache`] module.
 
 pub mod batch_cache;
+pub mod cache_ops;
 pub mod error;
 pub mod kv_cache;
 pub mod memory;
@@ -28,6 +29,7 @@ pub mod rotating_cache;
 
 // ── Re-exports of core types ──
 pub use batch_cache::BatchKVCache;
+pub use cache_ops::{make_causal_mask, CacheOps};
 pub use error::{CacheError, Result};
 pub use kv_cache::KVCache;
 pub use memory::MemoryAwarePrefixCache;

@@ -28,9 +28,16 @@ pub fn generate_tool_call_id() -> String {
 }
 
 /// Strip `<think>...</think>` blocks from text, returning the cleaned text.
+///
+/// Also handles `<|begin_of_thought|>...<|end_of_thought|>` blocks used by
+/// DeepSeek R1 and similar models.
 pub fn strip_think_tags(text: &str) -> String {
-    static RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s)<think>.*?</think>").unwrap());
-    RE.replace_all(text, "").to_string()
+    static THINK_RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"(?s)<think>.*?</think>").unwrap());
+    static THOUGHT_RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"(?s)<\|begin_of_thought\|>.*?<\|end_of_thought\|>").unwrap());
+    let result = THINK_RE.replace_all(text, "");
+    THOUGHT_RE.replace_all(&result, "").to_string()
 }
 
 /// Try to parse a JSON object as a tool call.
@@ -173,6 +180,18 @@ mod tests {
     fn test_strip_think_tags_multiline() {
         let input = "<think>\nstep 1\nstep 2\n</think>\nAnswer: 42";
         assert_eq!(strip_think_tags(input), "\nAnswer: 42");
+    }
+
+    #[test]
+    fn test_strip_think_tags_thought_format() {
+        let input = "<|begin_of_thought|>deep reasoning here<|end_of_thought|>Answer: 42";
+        assert_eq!(strip_think_tags(input), "Answer: 42");
+    }
+
+    #[test]
+    fn test_strip_think_tags_mixed_formats() {
+        let input = "<think>think1</think>middle<|begin_of_thought|>think2<|end_of_thought|>end";
+        assert_eq!(strip_think_tags(input), "middleend");
     }
 
     #[test]

@@ -19,9 +19,8 @@ static PYTHON_TAG_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?s)<\|python_tag\|>\s*(.*)").unwrap());
 
 /// Regex for `<function=name>{...}</function>` format (Llama 3.1+).
-static FUNCTION_TAG_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?s)<function=([^>]+)>\s*(.*?)\s*</function>").unwrap()
-});
+static FUNCTION_TAG_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?s)<function=([^>]+)>\s*(.*?)\s*</function>").unwrap());
 
 /// Parser for Llama-style tool calls.
 pub struct LlamaToolParser {
@@ -147,11 +146,7 @@ impl ToolCallParser for LlamaToolParser {
             }
         } else if has_function_tag {
             // Content is everything before the first <function= tag
-            let before = cleaned
-                .split("<function=")
-                .next()
-                .unwrap_or("")
-                .trim();
+            let before = cleaned.split("<function=").next().unwrap_or("").trim();
             if before.is_empty() {
                 None
             } else {
@@ -206,8 +201,7 @@ impl ToolCallParser for LlamaToolParser {
         // Heuristic: finished if we have at least one tool call and text ends
         // with a closing brace/tag (possibly with whitespace).
         let finished = !all_calls.is_empty()
-            && (text.trim().ends_with('}')
-                || text.trim().ends_with("</function>"));
+            && (text.trim().ends_with('}') || text.trim().ends_with("</function>"));
 
         StreamingParseResult {
             content: None,

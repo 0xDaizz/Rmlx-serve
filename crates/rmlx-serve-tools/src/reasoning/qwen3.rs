@@ -11,9 +11,8 @@ use std::sync::LazyLock;
 use crate::reasoning_parser::ReasoningParser;
 use crate::types::ReasoningParseResult;
 
-static THINK_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?s)<think>(.*?)</think>").unwrap()
-});
+static THINK_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?s)<think>(.*?)</think>").unwrap());
 
 /// Parser for Qwen3-style reasoning blocks.
 pub struct Qwen3Parser {
@@ -105,8 +104,7 @@ impl ReasoningParser for Qwen3Parser {
                 }
                 if partial_len > 0 {
                     let safe_end = self.raw_buffer.len() - partial_len;
-                    self.content_buffer
-                        .push_str(&self.raw_buffer[..safe_end]);
+                    self.content_buffer.push_str(&self.raw_buffer[..safe_end]);
                     self.raw_buffer = self.raw_buffer[safe_end..].to_string();
                     break;
                 }

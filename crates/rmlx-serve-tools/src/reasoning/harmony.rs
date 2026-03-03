@@ -8,9 +8,8 @@ use std::sync::LazyLock;
 use crate::reasoning_parser::ReasoningParser;
 use crate::types::ReasoningParseResult;
 
-static REFLECTION_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?s)<reflection>(.*?)</reflection>").unwrap()
-});
+static REFLECTION_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?s)<reflection>(.*?)</reflection>").unwrap());
 
 const OPEN_TAG: &str = "<reflection>";
 const CLOSE_TAG: &str = "</reflection>";
@@ -103,8 +102,7 @@ impl ReasoningParser for HarmonyParser {
                 }
                 if partial_len > 0 {
                     let safe_end = self.raw_buffer.len() - partial_len;
-                    self.content_buffer
-                        .push_str(&self.raw_buffer[..safe_end]);
+                    self.content_buffer.push_str(&self.raw_buffer[..safe_end]);
                     self.raw_buffer = self.raw_buffer[safe_end..].to_string();
                     break;
                 }
@@ -141,8 +139,7 @@ mod tests {
     #[test]
     fn test_reflection_block() {
         let parser = HarmonyParser::new();
-        let text =
-            "<reflection>Let me reconsider...</reflection>\nActually, the answer is 7.";
+        let text = "<reflection>Let me reconsider...</reflection>\nActually, the answer is 7.";
         let result = parser.parse(text);
         assert!(result.thinking.is_some());
         assert!(result.thinking.unwrap().contains("reconsider"));

@@ -16,13 +16,11 @@ use std::sync::LazyLock;
 use crate::reasoning_parser::ReasoningParser;
 use crate::types::ReasoningParseResult;
 
-static THINK_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?s)<think>(.*?)</think>").unwrap()
-});
+static THINK_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?s)<think>(.*?)</think>").unwrap());
 
-static THOUGHT_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?s)<\|begin_of_thought\|>(.*?)<\|end_of_thought\|>").unwrap()
-});
+static THOUGHT_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?s)<\|begin_of_thought\|>(.*?)<\|end_of_thought\|>").unwrap());
 
 const THOUGHT_OPEN: &str = "<|begin_of_thought|>";
 const THOUGHT_CLOSE: &str = "<|end_of_thought|>";
@@ -42,8 +40,8 @@ pub struct DeepSeekR1Parser {
 #[derive(Clone, Copy, PartialEq)]
 enum TagFormat {
     Unknown,
-    Think,    // <think>...</think>
-    Thought,  // <|begin_of_thought|>...<|end_of_thought|>
+    Think,   // <think>...</think>
+    Thought, // <|begin_of_thought|>...<|end_of_thought|>
 }
 
 impl DeepSeekR1Parser {
@@ -237,8 +235,7 @@ impl ReasoningParser for DeepSeekR1Parser {
                 }
                 if partial_len > 0 {
                     let safe_end = self.raw_buffer.len() - partial_len;
-                    self.content_buffer
-                        .push_str(&self.raw_buffer[..safe_end]);
+                    self.content_buffer.push_str(&self.raw_buffer[..safe_end]);
                     self.raw_buffer = self.raw_buffer[safe_end..].to_string();
                     break;
                 }

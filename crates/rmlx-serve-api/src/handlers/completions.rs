@@ -120,8 +120,7 @@ pub async fn completions(
     }
 }
 
-type SseStream =
-    Pin<Box<dyn futures_core::Stream<Item = Result<Event, Infallible>> + Send>>;
+type SseStream = Pin<Box<dyn futures_core::Stream<Item = Result<Event, Infallible>> + Send>>;
 
 /// Build SSE stream for a streaming text completion.
 ///

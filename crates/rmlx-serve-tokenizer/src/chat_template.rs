@@ -85,7 +85,13 @@ impl ChatTemplate {
         bos_token: &str,
         eos_token: &str,
     ) -> Result<String> {
-        self.apply_with_options(messages, bos_token, eos_token, None::<&[serde_json::Value]>, None)
+        self.apply_with_options(
+            messages,
+            bos_token,
+            eos_token,
+            None::<&[serde_json::Value]>,
+            None,
+        )
     }
 
     /// Full-featured rendering that accepts all template variables.
@@ -130,9 +136,8 @@ impl ChatTemplate {
             enable_thinking => enable_thinking,
         };
 
-        tmpl.render(ctx).map_err(|e| {
-            TokenizerError::TemplateFailed(format!("template render error: {e}"))
-        })
+        tmpl.render(ctx)
+            .map_err(|e| TokenizerError::TemplateFailed(format!("template render error: {e}")))
     }
 
     /// Try to load a `ChatTemplate` from `tokenizer_config.json` located in
@@ -143,22 +148,22 @@ impl ChatTemplate {
         let config_path = dir.join("tokenizer_config.json");
 
         if !config_path.exists() {
-            debug!("no tokenizer_config.json at {}, using default ChatML", dir.display());
+            debug!(
+                "no tokenizer_config.json at {}, using default ChatML",
+                dir.display()
+            );
             return Ok(Some(Self::new(DEFAULT_CHATML_TEMPLATE.to_string())));
         }
 
-        let raw = std::fs::read_to_string(&config_path).map_err(|e| {
-            TokenizerError::LoadFailed {
+        let raw =
+            std::fs::read_to_string(&config_path).map_err(|e| TokenizerError::LoadFailed {
                 path: config_path.clone(),
                 reason: e.to_string(),
-            }
-        })?;
+            })?;
 
-        let parsed: serde_json::Value =
-            serde_json::from_str(&raw).map_err(|e| TokenizerError::InvalidConfig(format!(
-                "failed to parse {}: {e}",
-                config_path.display()
-            )))?;
+        let parsed: serde_json::Value = serde_json::from_str(&raw).map_err(|e| {
+            TokenizerError::InvalidConfig(format!("failed to parse {}: {e}", config_path.display()))
+        })?;
 
         match parsed.get("chat_template") {
             Some(serde_json::Value::String(t)) => {
@@ -170,10 +175,7 @@ impl ChatTemplate {
                 // We pick the one named "default", or failing that the first entry.
                 let chosen = arr
                     .iter()
-                    .find(|v| {
-                        v.get("name")
-                            .and_then(|n| n.as_str()) == Some("default")
-                    })
+                    .find(|v| v.get("name").and_then(|n| n.as_str()) == Some("default"))
                     .or_else(|| arr.first());
 
                 if let Some(obj) = chosen {

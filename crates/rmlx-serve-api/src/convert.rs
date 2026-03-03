@@ -5,11 +5,11 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use rmlx_serve_types::anthropic::{
-    AnthropicContent, AnthropicMessageContent, AnthropicMessagesRequest,
-    AnthropicMessagesResponse, AnthropicRole, AnthropicSystemPrompt, AnthropicUsage, StopReason,
-};
 use rmlx_serve_tools::types::{ParsedToolCall, ReasoningParseResult, ToolCallParseResult};
+use rmlx_serve_types::anthropic::{
+    AnthropicContent, AnthropicMessageContent, AnthropicMessagesRequest, AnthropicMessagesResponse,
+    AnthropicRole, AnthropicSystemPrompt, AnthropicUsage, StopReason,
+};
 use rmlx_serve_types::openai::{
     ChatChoice, ChatChunkChoice, ChatCompletionChunk, ChatCompletionRequest,
     ChatCompletionResponse, ChatContent, ChatDelta, ChatMessage, ChatRole, CompletionChoice,
@@ -135,10 +135,7 @@ pub fn sampling_params_from_chat(req: &ChatCompletionRequest) -> SamplingParams 
 
 /// Build an internal [`Request`] from a [`ChatCompletionRequest`] and
 /// pre-encoded prompt token IDs.
-pub fn chat_request_to_internal(
-    req: &ChatCompletionRequest,
-    token_ids: Vec<u32>,
-) -> Request {
+pub fn chat_request_to_internal(req: &ChatCompletionRequest, token_ids: Vec<u32>) -> Request {
     let sampling = sampling_params_from_chat(req);
     let stream = req.stream.unwrap_or(false);
 
@@ -178,46 +175,56 @@ pub fn internal_to_chat_response(
             let raw_text = strip_special_tokens(&comp.text);
 
             // Apply reasoning extraction if available.
-            let (content_text, _reasoning) = if let Some(rr) = reasoning_results.and_then(|r| r.get(i)) {
-                (rr.content.clone(), rr.thinking.clone())
-            } else {
-                (raw_text.clone(), None)
-            };
+            let (content_text, _reasoning) =
+                if let Some(rr) = reasoning_results.and_then(|r| r.get(i)) {
+                    (rr.content.clone(), rr.thinking.clone())
+                } else {
+                    (raw_text.clone(), None)
+                };
 
             // Apply tool-call extraction if available.
-            let (final_content, tool_calls, finish) = if let Some(tr) = tool_results.and_then(|t| t.get(i)) {
-                if !tr.tool_calls.is_empty() {
-                    let oai_calls: Vec<ToolCall> = tr
-                        .tool_calls
-                        .iter()
-                        .map(parsed_tool_call_to_openai)
-                        .collect();
-                    // Use the content remaining after tool-call extraction;
-                    // if it is empty, omit it.
-                    let remaining = tr.content.as_deref().unwrap_or("").trim();
-                    let content = if remaining.is_empty() {
-                        None
+            let (final_content, tool_calls, finish) =
+                if let Some(tr) = tool_results.and_then(|t| t.get(i)) {
+                    if !tr.tool_calls.is_empty() {
+                        let oai_calls: Vec<ToolCall> = tr
+                            .tool_calls
+                            .iter()
+                            .map(parsed_tool_call_to_openai)
+                            .collect();
+                        // Use the content remaining after tool-call extraction;
+                        // if it is empty, omit it.
+                        let remaining = tr.content.as_deref().unwrap_or("").trim();
+                        let content = if remaining.is_empty() {
+                            None
+                        } else {
+                            Some(ChatContent::Text(remaining.to_string()))
+                        };
+                        (content, Some(oai_calls), Some("tool_calls".to_string()))
                     } else {
-                        Some(ChatContent::Text(remaining.to_string()))
-                    };
-                    (content, Some(oai_calls), Some("tool_calls".to_string()))
+                        // No tool calls detected -- pass content through.
+                        let content = if content_text.is_empty() {
+                            None
+                        } else {
+                            Some(ChatContent::Text(content_text))
+                        };
+                        (
+                            content,
+                            None,
+                            comp.finish_reason.map(finish_reason_to_string),
+                        )
+                    }
                 } else {
-                    // No tool calls detected -- pass content through.
                     let content = if content_text.is_empty() {
                         None
                     } else {
                         Some(ChatContent::Text(content_text))
                     };
-                    (content, None, comp.finish_reason.map(finish_reason_to_string))
-                }
-            } else {
-                let content = if content_text.is_empty() {
-                    None
-                } else {
-                    Some(ChatContent::Text(content_text))
+                    (
+                        content,
+                        None,
+                        comp.finish_reason.map(finish_reason_to_string),
+                    )
                 };
-                (content, None, comp.finish_reason.map(finish_reason_to_string))
-            };
 
             ChatChoice {
                 index: comp.index,
@@ -234,11 +241,7 @@ pub fn internal_to_chat_response(
         })
         .collect();
 
-    let completion_tokens: usize = output
-        .outputs
-        .iter()
-        .map(|c| c.token_ids.len())
-        .sum();
+    let completion_tokens: usize = output.outputs.iter().map(|c| c.token_ids.len()).sum();
 
     ChatCompletionResponse {
         id: format!("chatcmpl-{}", uuid::Uuid::new_v4()),
@@ -352,11 +355,7 @@ pub fn internal_to_completion_response(
         })
         .collect();
 
-    let completion_tokens: usize = output
-        .outputs
-        .iter()
-        .map(|c| c.token_ids.len())
-        .sum();
+    let completion_tokens: usize = output.outputs.iter().map(|c| c.token_ids.len()).sum();
 
     CompletionResponse {
         id: format!("cmpl-{}", uuid::Uuid::new_v4()),
@@ -417,9 +416,9 @@ pub fn anthropic_to_chat_request(req: &AnthropicMessagesRequest) -> ChatCompleti
             AnthropicSystemPrompt::Blocks(blocks) => blocks
                 .iter()
                 .map(|b| match b {
-                    rmlx_serve_types::anthropic::AnthropicSystemBlock::Text {
-                        text, ..
-                    } => text.as_str(),
+                    rmlx_serve_types::anthropic::AnthropicSystemBlock::Text { text, .. } => {
+                        text.as_str()
+                    }
                 })
                 .collect::<Vec<_>>()
                 .join("\n"),
@@ -478,10 +477,7 @@ pub fn anthropic_to_chat_request(req: &AnthropicMessagesRequest) -> ChatCompleti
         presence_penalty: None,
         frequency_penalty: None,
         logit_bias: None,
-        user: req
-            .metadata
-            .as_ref()
-            .and_then(|m| m.user_id.clone()),
+        user: req.metadata.as_ref().and_then(|m| m.user_id.clone()),
         tools: None,
         tool_choice: None,
         response_format: None,
@@ -493,9 +489,7 @@ pub fn anthropic_to_chat_request(req: &AnthropicMessagesRequest) -> ChatCompleti
 }
 
 /// Convert a [`ChatCompletionResponse`] to an [`AnthropicMessagesResponse`].
-pub fn chat_response_to_anthropic(
-    resp: &ChatCompletionResponse,
-) -> AnthropicMessagesResponse {
+pub fn chat_response_to_anthropic(resp: &ChatCompletionResponse) -> AnthropicMessagesResponse {
     let content: Vec<AnthropicContent> = resp
         .choices
         .iter()
@@ -561,9 +555,7 @@ pub fn validate_chat_request(req: &ChatCompletionRequest) -> Result<(), String> 
 
     if let Some(t) = req.temperature {
         if !(0.0..=2.0).contains(&t) {
-            return Err(format!(
-                "temperature must be between 0.0 and 2.0, got {t}"
-            ));
+            return Err(format!("temperature must be between 0.0 and 2.0, got {t}"));
         }
     }
 
@@ -671,12 +663,7 @@ pub fn finish_reason_to_string(reason: FinishReason) -> String {
 
 /// Common special / end-of-sequence tokens that should be stripped from
 /// generation output before returning to the client.
-const SPECIAL_TOKENS: &[&str] = &[
-    "<|im_end|>",
-    "<|eot_id|>",
-    "<|end|>",
-    "<|endoftext|>",
-];
+const SPECIAL_TOKENS: &[&str] = &["<|im_end|>", "<|eot_id|>", "<|end|>", "<|endoftext|>"];
 
 /// Strip common special tokens from generated text.
 pub fn strip_special_tokens(text: &str) -> String {

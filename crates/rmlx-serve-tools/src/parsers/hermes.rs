@@ -137,7 +137,10 @@ impl HermesToolParser {
                     tool_calls.push(tc);
                 }
                 None => {
-                    debug!(json = json_str, "failed to parse lenient Hermes tool call JSON");
+                    debug!(
+                        json = json_str,
+                        "failed to parse lenient Hermes tool call JSON"
+                    );
                 }
             }
         }
@@ -390,8 +393,7 @@ mod tests {
     fn test_lenient_tag_matching() {
         let parser = HermesToolParser::new();
         // Extra whitespace in tags
-        let text =
-            r#"< tool_call >{"name": "get_weather", "arguments": {"city": "London"}}< / tool_call >"#;
+        let text = r#"< tool_call >{"name": "get_weather", "arguments": {"city": "London"}}< / tool_call >"#;
         let result = parser.parse(text);
         assert_eq!(result.tool_calls.len(), 1);
         assert_eq!(result.tool_calls[0].name, "get_weather");

@@ -41,7 +41,7 @@ const TOOL_SEP: &str = "<|tool_sep|>";
 /// `<|tool_call_begin|>function<|tool_sep|>name\n{...}<|tool_call_end|>`
 static ASCII_CALL_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r"(?s)<\|tool_call_begin\|>\s*(?:function\s*)?<\|tool_sep\|>\s*(.*?)\s*<\|tool_call_end\|>"
+        r"(?s)<\|tool_call_begin\|>\s*(?:function\s*)?<\|tool_sep\|>\s*(.*?)\s*<\|tool_call_end\|>",
     )
     .unwrap()
 });
@@ -431,8 +431,10 @@ mod tests {
         let parser = DeepSeekToolParser::new();
         let text = format!(
             "{}get_weather\n{{\"city\": \"London\"}}{}{}get_time\n{{\"tz\": \"UTC\"}}{}",
-            LEGACY_TOOL_CALL_BEGIN, LEGACY_TOOL_CALL_END,
-            LEGACY_TOOL_CALL_BEGIN, LEGACY_TOOL_CALL_END
+            LEGACY_TOOL_CALL_BEGIN,
+            LEGACY_TOOL_CALL_END,
+            LEGACY_TOOL_CALL_BEGIN,
+            LEGACY_TOOL_CALL_END
         );
         let result = parser.parse(&text);
         assert_eq!(result.tool_calls.len(), 2);

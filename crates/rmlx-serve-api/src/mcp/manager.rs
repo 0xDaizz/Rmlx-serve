@@ -57,11 +57,7 @@ impl McpClientManager {
                     server_tools.push((name.clone(), tools));
                 }
                 Err(e) => {
-                    tracing::warn!(
-                        "Failed to discover tools from MCP server {:?}: {}",
-                        name,
-                        e
-                    );
+                    tracing::warn!("Failed to discover tools from MCP server {:?}: {}", name, e);
                 }
             }
         }

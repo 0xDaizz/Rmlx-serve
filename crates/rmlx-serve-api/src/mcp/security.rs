@@ -15,18 +15,7 @@ pub struct McpSecurity {
 }
 
 /// Patterns that indicate potential shell injection.
-const DANGEROUS_PATTERNS: &[&str] = &[
-    ";",
-    "|",
-    "&&",
-    "||",
-    "`",
-    "$(",
-    "$((",
-    ">{",
-    "<(",
-    ">>",
-];
+const DANGEROUS_PATTERNS: &[&str] = &[";", "|", "&&", "||", "`", "$(", "$((", ">{", "<(", ">>"];
 
 impl McpSecurity {
     /// Create a new `McpSecurity` instance with the given command whitelist.

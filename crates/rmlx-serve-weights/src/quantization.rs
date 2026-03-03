@@ -453,14 +453,8 @@ mod tests {
         // value 7 at bits[4..8], value 9 at bits[20..24],
         // value 1 at bits[8..12], value 2 at bits[24..28],
         // value 4 at bits[12..16], value 6 at bits[28..32]
-        let packed_val: u32 = (3 << 0)
-            | (7 << 4)
-            | (1 << 8)
-            | (4 << 12)
-            | (5 << 16)
-            | (9 << 20)
-            | (2 << 24)
-            | (6 << 28);
+        let packed_val: u32 =
+            3 | (7 << 4) | (1 << 8) | (4 << 12) | (5 << 16) | (9 << 20) | (2 << 24) | (6 << 28);
         let packed = packed_val.to_le_bytes().to_vec();
         let result = unpack_awq_weights(&packed, 4, 128);
         assert_eq!(result.len(), 8); // 32/4 = 8 values per u32

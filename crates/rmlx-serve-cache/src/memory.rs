@@ -263,8 +263,7 @@ mod tests {
         // Just ensure it doesn't panic and returns a non-zero value.
         // In sandboxed environments, sysinfo may return 0 for available_memory;
         // our implementation falls back to free_memory or usize::MAX.
-        let mb = MemoryAwarePrefixCache::available_memory_mb();
-        // The value should always be positive (either real memory info or usize::MAX fallback).
-        assert!(mb > 0 || mb == 0, "available_memory_mb should not panic");
+        let _mb = MemoryAwarePrefixCache::available_memory_mb();
+        // If we reach here without panicking, the function works correctly.
     }
 }

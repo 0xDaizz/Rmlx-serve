@@ -12,9 +12,7 @@ use crate::parsers::utils::{
     extract_json_array, extract_json_objects, parse_json_tool_call, strip_think_tags,
 };
 use crate::tool_parser::ToolCallParser;
-use crate::types::{
-    DeltaToolCall, ParsedToolCall, StreamingParseResult, ToolCallParseResult,
-};
+use crate::types::{DeltaToolCall, ParsedToolCall, StreamingParseResult, ToolCallParseResult};
 
 /// Automatic tool call parser that tries multiple detection strategies.
 pub struct AutoToolParser {
@@ -189,8 +187,7 @@ mod tests {
     #[test]
     fn test_json_array() {
         let parser = AutoToolParser::new();
-        let text =
-            r#"[{"name": "get_weather", "arguments": {"city": "London"}}, {"name": "get_time", "arguments": {"tz": "UTC"}}]"#;
+        let text = r#"[{"name": "get_weather", "arguments": {"city": "London"}}, {"name": "get_time", "arguments": {"tz": "UTC"}}]"#;
         let result = parser.parse(text);
         assert_eq!(result.tool_calls.len(), 2);
         assert_eq!(result.tool_calls[0].name, "get_weather");
@@ -209,8 +206,7 @@ mod tests {
     #[test]
     fn test_tool_calls_wrapper() {
         let parser = AutoToolParser::new();
-        let text =
-            r#"{"tool_calls": [{"name": "search", "arguments": {"q": "rust"}}]}"#;
+        let text = r#"{"tool_calls": [{"name": "search", "arguments": {"q": "rust"}}]}"#;
         let result = parser.parse(text);
         assert_eq!(result.tool_calls.len(), 1);
         assert_eq!(result.tool_calls[0].name, "search");
@@ -246,7 +242,8 @@ mod tests {
     #[test]
     fn test_with_think_tags() {
         let parser = AutoToolParser::new();
-        let text = r#"<think>Let me think...</think>{"name": "search", "arguments": {"q": "test"}}"#;
+        let text =
+            r#"<think>Let me think...</think>{"name": "search", "arguments": {"q": "test"}}"#;
         let result = parser.parse(text);
         assert_eq!(result.tool_calls.len(), 1);
     }

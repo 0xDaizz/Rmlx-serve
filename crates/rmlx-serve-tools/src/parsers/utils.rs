@@ -21,14 +21,15 @@ pub fn generate_tool_call_id() -> String {
         .unwrap_or_default()
         .as_nanos() as u64;
     // Mix counter and time for uniqueness
-    let mixed = count.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(nanos);
+    let mixed = count
+        .wrapping_mul(6_364_136_223_846_793_005)
+        .wrapping_add(nanos);
     format!("call_{:016x}{:08x}", nanos, mixed as u32)
 }
 
 /// Strip `<think>...</think>` blocks from text, returning the cleaned text.
 pub fn strip_think_tags(text: &str) -> String {
-    static RE: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"(?s)<think>.*?</think>").unwrap());
+    static RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s)<think>.*?</think>").unwrap());
     RE.replace_all(text, "").to_string()
 }
 

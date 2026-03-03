@@ -1,6 +1,7 @@
 //! `rmlx-serve bench` subcommand -- benchmark inference throughput and latency.
 
-use rmlx_serve_engine::Engine;
+use rmlx_serve_engine::{BatchedEngine, Engine, SimpleEngine};
+use rmlx_serve_types::config::EngineConfig;
 use rmlx_serve_types::SamplingParams;
 use std::sync::Arc;
 use tokio::time::Instant;
@@ -70,16 +71,7 @@ pub async fn run_bench(args: BenchArgs) -> Result<(), Box<dyn std::error::Error 
     // -----------------------------------------------------------------------
     // 1. Create engine
     // -----------------------------------------------------------------------
-    //
-    // When concrete engine implementations exist:
-    //
-    //   let engine: Arc<dyn Engine> = if args.continuous_batching {
-    //       Arc::new(BatchedEngine::new(config).await?)
-    //   } else {
-    //       Arc::new(SimpleEngine::new(config).await?)
-    //   };
-
-    let engine_config = rmlx_serve_types::config::EngineConfig {
+    let engine_config = EngineConfig {
         model: args.model.clone(),
         scheduler: rmlx_serve_types::config::SchedulerConfig {
             max_num_seqs: args.concurrency.max(256),
@@ -88,7 +80,15 @@ pub async fn run_bench(args: BenchArgs) -> Result<(), Box<dyn std::error::Error 
         ..Default::default()
     };
 
-    let engine: Arc<dyn Engine> = Arc::new(crate::stub_engine::StubEngine::new(engine_config));
+    let engine: Arc<dyn Engine> = if args.continuous_batching {
+        info!("initialising BatchedEngine ...");
+        Arc::new(BatchedEngine::new(engine_config).await?)
+    } else {
+        info!("initialising SimpleEngine ...");
+        Arc::new(SimpleEngine::new(engine_config).await?)
+    };
+
+    info!("engine initialised, model loaded");
 
     // -----------------------------------------------------------------------
     // 2. Generate dummy prompts
@@ -114,12 +114,9 @@ pub async fn run_bench(args: BenchArgs) -> Result<(), Box<dyn std::error::Error 
         // Sequential execution
         for i in 0..args.num_requests {
             info!("request {}/{}", i + 1, args.num_requests);
-            let result = run_single_request(
-                engine.clone(),
-                dummy_prompt_tokens.clone(),
-                args.max_tokens,
-            )
-            .await?;
+            let result =
+                run_single_request(engine.clone(), dummy_prompt_tokens.clone(), args.max_tokens)
+                    .await?;
             results.push(result);
         }
     } else {
@@ -188,18 +185,9 @@ pub async fn run_bench(args: BenchArgs) -> Result<(), Box<dyn std::error::Error 
     println!("=========================================================");
     println!();
     print_table_header();
-    print_metric_row(
-        "TTFT (s)",
-        &ttft_values,
-    );
-    print_metric_row(
-        "E2E Latency (s)",
-        &latency_values,
-    );
-    print_metric_row(
-        "Throughput (tok/s)",
-        &tps_values,
-    );
+    print_metric_row("TTFT (s)", &ttft_values);
+    print_metric_row("E2E Latency (s)", &latency_values);
+    print_metric_row("Throughput (tok/s)", &tps_values);
     print_table_footer();
     println!();
     println!("  Total requests       : {}", args.num_requests);
@@ -232,9 +220,11 @@ async fn run_single_request(
         request_start.elapsed().as_secs_f64(),
     );
 
-    let output = engine.generate(request).await.map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
-        Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
-    })?;
+    let output = engine.generate(request).await.map_err(
+        |e| -> Box<dyn std::error::Error + Send + Sync> {
+            Box::new(std::io::Error::other(e.to_string()))
+        },
+    )?;
 
     let e2e_elapsed = request_start.elapsed();
 
@@ -246,14 +236,10 @@ async fn run_single_request(
 
     // Extract TTFT from metrics if available, otherwise estimate as a fraction
     // of the total time.
-    let ttft_secs = output
-        .metrics
-        .as_ref()
-        .and_then(|m| m.ttft())
-        .unwrap_or_else(|| {
-            // Heuristic fallback: assume prefill is ~10% of total time.
-            e2e_elapsed.as_secs_f64() * 0.1
-        });
+    let ttft_secs = output.metrics.as_ref().and_then(|m| m.ttft()).unwrap_or({
+        // Heuristic fallback: assume prefill is ~10% of total time.
+        e2e_elapsed.as_secs_f64() * 0.1
+    });
 
     let e2e_secs = e2e_elapsed.as_secs_f64();
     let tps = if e2e_secs > 0.0 && gen_tokens > 0 {

@@ -88,9 +88,7 @@ pub fn sharded_load(
     );
 
     if num_shards == 0 {
-        return Err(ModelError::InvalidConfig(
-            "num_shards must be > 0".into(),
-        ));
+        return Err(ModelError::InvalidConfig("num_shards must be > 0".into()));
     }
     if shard_id >= num_shards {
         return Err(ModelError::InvalidConfig(format!(

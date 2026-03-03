@@ -3,7 +3,7 @@
 //! Ported from mlx-lm's `BatchGenerator` `Batch` abstraction. A `Batch`
 //! holds the state of all active sequences being decoded together.
 
-use rmlx_serve_sampling::LogitsProcessor;
+use rmlx_serve_sampling::{LogitsProcessor, SamplerFn};
 use rmlx_serve_types::FinishReason;
 
 /// Unique identifier for a sequence within the batch generator.
@@ -13,6 +13,10 @@ pub type SequenceId = u64;
 pub struct SequenceState {
     /// Unique identifier for this sequence across all batches.
     pub uid: SequenceId,
+
+    /// The original prompt token ids (needed for logits processors like
+    /// repetition penalty that require full context: prompt + generated).
+    pub prompt_tokens: Vec<u32>,
 
     /// All token ids generated so far (excluding the original prompt).
     pub token_ids: Vec<u32>,
@@ -27,7 +31,7 @@ pub struct SequenceState {
     pub num_generated: usize,
 
     /// The sampler closure: takes a logits slice and returns the sampled token id.
-    pub sampler: Box<dyn Fn(&[f32]) -> u32 + Send>,
+    pub sampler: SamplerFn,
 
     /// Context-dependent logits processors (repetition penalty, etc.).
     pub logits_processors: Vec<Box<dyn LogitsProcessor>>,
@@ -97,8 +101,8 @@ impl Batch {
         );
 
         let mut write = 0;
-        for read in 0..self.sequences.len() {
-            if keep[read] {
+        for (read, &should_keep) in keep.iter().enumerate().take(self.sequences.len()) {
+            if should_keep {
                 if write != read {
                     self.sequences.swap(write, read);
                 }
@@ -147,6 +151,7 @@ mod tests {
     fn make_test_state(uid: SequenceId, token: u32) -> SequenceState {
         SequenceState {
             uid,
+            prompt_tokens: vec![],
             token_ids: vec![],
             current_token: token,
             max_tokens: 100,

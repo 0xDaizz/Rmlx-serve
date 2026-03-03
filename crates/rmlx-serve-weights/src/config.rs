@@ -8,9 +8,28 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
+use rmlx_core::DType;
 use rmlx_nn::{FeedForwardType, MoeConfig, TransformerConfig};
 
 use crate::error::{Result, WeightError};
+
+/// Convert a PyTorch dtype string (from HuggingFace config.json) to an RMLX DType.
+///
+/// Handles common aliases used in HuggingFace model configs. Returns `None` for
+/// types that have no RMLX equivalent (e.g., integer types not supported on the
+/// Metal compute backend).
+pub fn torch_dtype_to_rmlx(dtype_str: &str) -> Option<DType> {
+    match dtype_str {
+        "float16" | "fp16" => Some(DType::Float16),
+        "bfloat16" | "bf16" => Some(DType::Bfloat16),
+        "float32" | "fp32" | "float" => Some(DType::Float32),
+        // Integer types: rmlx-core currently only exposes UInt32.
+        // Int8, UInt8, Int16, UInt16, and Int32 are not available as DType variants
+        // in rmlx-core's Metal-backed array system.
+        "uint32" | "u32" => Some(DType::UInt32),
+        _ => None,
+    }
+}
 
 /// Quantization configuration embedded in config.json (AWQ, GPTQ, etc.).
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -100,6 +119,11 @@ pub struct ModelConfig {
     /// PyTorch dtype string (e.g., "float16", "bfloat16").
     #[serde(default)]
     pub torch_dtype: Option<String>,
+
+    /// Whether the model uses attention bias (q/k/v projections).
+    /// Some models like Qwen2 use bias, while Llama/Mistral don't.
+    #[serde(default)]
+    pub attention_bias: Option<bool>,
 }
 
 impl ModelConfig {
@@ -111,9 +135,8 @@ impl ModelConfig {
         }
 
         let content = std::fs::read_to_string(&config_path)?;
-        let config: ModelConfig = serde_json::from_str(&content).map_err(|e| {
-            WeightError::InvalidConfig(format!("failed to parse config.json: {e}"))
-        })?;
+        let config: ModelConfig = serde_json::from_str(&content)
+            .map_err(|e| WeightError::InvalidConfig(format!("failed to parse config.json: {e}")))?;
 
         debug!(
             model_type = %config.model_type,
@@ -147,20 +170,27 @@ impl ModelConfig {
         hidden / heads
     }
 
+    /// Get the model's preferred DType based on `torch_dtype` from config.json.
+    ///
+    /// Returns `None` if `torch_dtype` is not set or maps to an unsupported type.
+    pub fn dtype(&self) -> Option<DType> {
+        self.torch_dtype.as_deref().and_then(torch_dtype_to_rmlx)
+    }
+
     /// Convert this HuggingFace config into the RMLX TransformerConfig.
     pub fn to_transformer_config(&self) -> Result<TransformerConfig> {
-        let hidden_size = self.hidden_size.ok_or_else(|| {
-            WeightError::InvalidConfig("missing hidden_size".into())
-        })?;
-        let num_heads = self.num_attention_heads.ok_or_else(|| {
-            WeightError::InvalidConfig("missing num_attention_heads".into())
-        })?;
-        let num_layers = self.num_hidden_layers.ok_or_else(|| {
-            WeightError::InvalidConfig("missing num_hidden_layers".into())
-        })?;
-        let vocab_size = self.vocab_size.ok_or_else(|| {
-            WeightError::InvalidConfig("missing vocab_size".into())
-        })?;
+        let hidden_size = self
+            .hidden_size
+            .ok_or_else(|| WeightError::InvalidConfig("missing hidden_size".into()))?;
+        let num_heads = self
+            .num_attention_heads
+            .ok_or_else(|| WeightError::InvalidConfig("missing num_attention_heads".into()))?;
+        let num_layers = self
+            .num_hidden_layers
+            .ok_or_else(|| WeightError::InvalidConfig("missing num_hidden_layers".into()))?;
+        let vocab_size = self
+            .vocab_size
+            .ok_or_else(|| WeightError::InvalidConfig("missing vocab_size".into()))?;
 
         let num_kv_heads = self.effective_num_kv_heads();
         let head_dim = self.effective_head_dim();
@@ -184,9 +214,9 @@ impl ModelConfig {
                 },
             }
         } else {
-            let intermediate_dim = self.intermediate_size.ok_or_else(|| {
-                WeightError::InvalidConfig("missing intermediate_size".into())
-            })?;
+            let intermediate_dim = self
+                .intermediate_size
+                .ok_or_else(|| WeightError::InvalidConfig("missing intermediate_size".into()))?;
             FeedForwardType::Dense { intermediate_dim }
         };
 

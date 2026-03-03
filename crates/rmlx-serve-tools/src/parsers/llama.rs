@@ -12,13 +12,10 @@ use crate::parsers::utils::{
     extract_json_objects, generate_tool_call_id, parse_json_tool_call, strip_think_tags,
 };
 use crate::tool_parser::ToolCallParser;
-use crate::types::{
-    DeltaToolCall, ParsedToolCall, StreamingParseResult, ToolCallParseResult,
-};
+use crate::types::{DeltaToolCall, ParsedToolCall, StreamingParseResult, ToolCallParseResult};
 
-static PYTHON_TAG_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?s)<\|python_tag\|>\s*(.*)").unwrap()
-});
+static PYTHON_TAG_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?s)<\|python_tag\|>\s*(.*)").unwrap());
 
 /// Parser for Llama-style tool calls.
 pub struct LlamaToolParser {
@@ -47,7 +44,7 @@ impl LlamaToolParser {
         };
 
         // Try to parse as JSON array first
-        if let Ok(arr) = serde_json::from_str::<Vec<serde_json::Value>>(&json_text.trim()) {
+        if let Ok(arr) = serde_json::from_str::<Vec<serde_json::Value>>(json_text.trim()) {
             for item in arr {
                 if let Some(obj) = item.as_object() {
                     if let Some(name) = obj.get("name").and_then(|n| n.as_str()) {
@@ -179,8 +176,7 @@ mod tests {
     #[test]
     fn test_python_tag_single() {
         let parser = LlamaToolParser::new();
-        let text =
-            r#"<|python_tag|>{"name": "get_weather", "parameters": {"city": "London"}}"#;
+        let text = r#"<|python_tag|>{"name": "get_weather", "parameters": {"city": "London"}}"#;
         let result = parser.parse(text);
         assert_eq!(result.tool_calls.len(), 1);
         assert_eq!(result.tool_calls[0].name, "get_weather");

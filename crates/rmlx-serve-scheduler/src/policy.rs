@@ -30,10 +30,7 @@ impl SchedulingPolicy {
 /// For `Fcfs`, requests are already in FIFO order so no sorting is needed.
 /// For `Priority`, requests are sorted by arrival time (earliest first),
 /// breaking ties by prompt length (shorter first).
-pub fn sort_waiting_requests(
-    requests: &mut VecDeque<WaitingRequest>,
-    policy: SchedulingPolicy,
-) {
+pub fn sort_waiting_requests(requests: &mut VecDeque<WaitingRequest>, policy: SchedulingPolicy) {
     match policy {
         SchedulingPolicy::Fcfs => {
             // Already in FIFO order from VecDeque push_back semantics.
@@ -132,9 +129,21 @@ mod tests {
 
     #[test]
     fn test_from_str_config() {
-        assert_eq!(SchedulingPolicy::from_str_config("fcfs"), SchedulingPolicy::Fcfs);
-        assert_eq!(SchedulingPolicy::from_str_config("priority"), SchedulingPolicy::Priority);
-        assert_eq!(SchedulingPolicy::from_str_config("PRIORITY"), SchedulingPolicy::Priority);
-        assert_eq!(SchedulingPolicy::from_str_config("unknown"), SchedulingPolicy::Fcfs);
+        assert_eq!(
+            SchedulingPolicy::from_str_config("fcfs"),
+            SchedulingPolicy::Fcfs
+        );
+        assert_eq!(
+            SchedulingPolicy::from_str_config("priority"),
+            SchedulingPolicy::Priority
+        );
+        assert_eq!(
+            SchedulingPolicy::from_str_config("PRIORITY"),
+            SchedulingPolicy::Priority
+        );
+        assert_eq!(
+            SchedulingPolicy::from_str_config("unknown"),
+            SchedulingPolicy::Fcfs
+        );
     }
 }

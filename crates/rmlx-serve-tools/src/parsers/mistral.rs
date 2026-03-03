@@ -8,13 +8,10 @@ use tracing::debug;
 
 use crate::parsers::utils::{extract_json_array, generate_tool_call_id, strip_think_tags};
 use crate::tool_parser::ToolCallParser;
-use crate::types::{
-    DeltaToolCall, ParsedToolCall, StreamingParseResult, ToolCallParseResult,
-};
+use crate::types::{DeltaToolCall, ParsedToolCall, StreamingParseResult, ToolCallParseResult};
 
-static TOOL_CALLS_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?s)\[TOOL_CALLS\]\s*(.*)").unwrap()
-});
+static TOOL_CALLS_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?s)\[TOOL_CALLS\]\s*(.*)").unwrap());
 
 /// Parser for Mistral-style `[TOOL_CALLS]` blocks.
 pub struct MistralToolParser {
@@ -197,8 +194,7 @@ mod tests {
     #[test]
     fn test_single_tool_call() {
         let parser = MistralToolParser::new();
-        let text =
-            r#"[TOOL_CALLS] [{"name": "get_weather", "arguments": {"city": "London"}}]"#;
+        let text = r#"[TOOL_CALLS] [{"name": "get_weather", "arguments": {"city": "London"}}]"#;
         let result = parser.parse(text);
         assert_eq!(result.tool_calls.len(), 1);
         assert_eq!(result.tool_calls[0].name, "get_weather");

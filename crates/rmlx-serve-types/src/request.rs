@@ -58,6 +58,16 @@ pub enum RequestStatus {
     Running,
     /// Generation complete.
     Finished,
+    /// Preempted by the scheduler (e.g. to free KV-cache for higher-priority
+    /// requests). The request may be rescheduled later.
+    Preempted,
+    /// Finished because a stop token or stop string was matched.
+    FinishedStopped,
+    /// Finished because the maximum token limit was reached.
+    FinishedLengthCapped,
+    /// Finished because the client disconnected or an unrecoverable error
+    /// occurred.
+    FinishedAborted,
 }
 
 // ---------------------------------------------------------------------------
@@ -289,14 +299,12 @@ pub struct RequestMetrics {
 impl RequestMetrics {
     /// Time-to-first-token in seconds, if available.
     pub fn ttft(&self) -> Option<f64> {
-        self.first_token_time
-            .map(|ft| ft - self.arrival_time)
+        self.first_token_time.map(|ft| ft - self.arrival_time)
     }
 
     /// Total generation latency in seconds, if available.
     pub fn total_latency(&self) -> Option<f64> {
-        self.finish_time
-            .map(|ft| ft - self.arrival_time)
+        self.finish_time.map(|ft| ft - self.arrival_time)
     }
 
     /// Tokens per second (completion tokens / generation time after first token).

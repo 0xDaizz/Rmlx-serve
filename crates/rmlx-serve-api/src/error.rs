@@ -95,12 +95,8 @@ impl From<serde_json::Error> for ApiError {
 impl From<rmlx_serve_engine::EngineError> for ApiError {
     fn from(err: rmlx_serve_engine::EngineError) -> Self {
         match &err {
-            rmlx_serve_engine::EngineError::Request(msg) => {
-                Self::InvalidRequest(msg.clone())
-            }
-            rmlx_serve_engine::EngineError::CapacityExceeded(msg) => {
-                Self::RateLimited(msg.clone())
-            }
+            rmlx_serve_engine::EngineError::Request(msg) => Self::InvalidRequest(msg.clone()),
+            rmlx_serve_engine::EngineError::CapacityExceeded(msg) => Self::RateLimited(msg.clone()),
             _ => Self::EngineError(err.to_string()),
         }
     }

@@ -91,7 +91,11 @@ pub async fn generate_text(
 ) -> Result<GenerationResponse, EngineError> {
     let overall_start = Instant::now();
 
-    info!(model = model_path, prompt_len = prompt.len(), "generate_text starting");
+    info!(
+        model = model_path,
+        prompt_len = prompt.len(),
+        "generate_text starting"
+    );
 
     // Build engine config.
     let config = EngineConfig {

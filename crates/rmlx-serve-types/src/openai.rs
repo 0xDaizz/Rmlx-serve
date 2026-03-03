@@ -25,21 +25,13 @@ pub enum ChatRole {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentPart {
     /// Plain text content.
-    Text {
-        text: String,
-    },
+    Text { text: String },
     /// An image specified by URL (or base64 data-URI).
-    ImageUrl {
-        image_url: ImageUrl,
-    },
+    ImageUrl { image_url: ImageUrl },
     /// A video specified by URL.
-    Video {
-        video: MediaUrl,
-    },
+    Video { video: MediaUrl },
     /// An audio clip specified by URL.
-    Audio {
-        audio: MediaUrl,
-    },
+    Audio { audio: MediaUrl },
 }
 
 /// URL reference for an image, with optional detail level.
@@ -275,6 +267,19 @@ pub struct ChatCompletionRequest {
     /// Number of top log-probs to return per token.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub top_logprobs: Option<usize>,
+
+    /// Options for streaming responses (e.g., include usage in final chunk).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stream_options: Option<StreamOptions>,
+}
+
+/// Options controlling streaming behavior.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct StreamOptions {
+    /// When `true`, the final streaming chunk includes a `usage` field with
+    /// prompt/completion/total token counts.
+    #[serde(default)]
+    pub include_usage: bool,
 }
 
 /// Stop condition can be a single string or an array of strings.

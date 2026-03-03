@@ -8,9 +8,8 @@ use std::sync::LazyLock;
 use crate::reasoning_parser::ReasoningParser;
 use crate::types::ReasoningParseResult;
 
-static THINK_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?s)<think>(.*?)</think>").unwrap()
-});
+static THINK_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?s)<think>(.*?)</think>").unwrap());
 
 /// Generic parser for `<think>...</think>` blocks.
 pub struct ThinkParser {
@@ -118,8 +117,7 @@ impl ReasoningParser for ThinkParser {
                     if partial_len > 0 {
                         // Move everything except the potential partial tag to content
                         let safe_end = self.raw_buffer.len() - partial_len;
-                        self.content_buffer
-                            .push_str(&self.raw_buffer[..safe_end]);
+                        self.content_buffer.push_str(&self.raw_buffer[..safe_end]);
                         self.raw_buffer = self.raw_buffer[safe_end..].to_string();
                         break;
                     }
@@ -160,10 +158,7 @@ mod tests {
         let parser = ThinkParser::new();
         let text = "<think>I need to figure this out</think>The answer is 42.";
         let result = parser.parse(text);
-        assert_eq!(
-            result.thinking.unwrap(),
-            "I need to figure this out"
-        );
+        assert_eq!(result.thinking.unwrap(), "I need to figure this out");
         assert_eq!(result.content, "The answer is 42.");
     }
 

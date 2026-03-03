@@ -106,7 +106,9 @@ pub fn save_prompt_cache(
         .collect();
 
     let serialized = safetensors::tensor::serialize(
-        tensor_views.iter().map(|(name, view)| (name.as_str(), view.clone())),
+        tensor_views
+            .iter()
+            .map(|(name, view)| (name.as_str(), view.clone())),
         &metadata,
     )
     .map_err(|e| CacheError::SerializationError(e.to_string()))?;
@@ -134,10 +136,7 @@ pub fn save_prompt_cache(
 /// # Errors
 /// Returns `CacheError::IoError` if the file cannot be read,
 /// or `CacheError::SerializationError` if the format is invalid.
-pub fn load_prompt_cache(
-    path: impl AsRef<Path>,
-    device: &metal::Device,
-) -> Result<KVCache> {
+pub fn load_prompt_cache(path: impl AsRef<Path>, device: &metal::Device) -> Result<KVCache> {
     let path = path.as_ref();
 
     let data = std::fs::read(path).map_err(|e| CacheError::IoError {
@@ -254,7 +253,7 @@ fn safetensors_to_dtype(dtype: safetensors::Dtype) -> DType {
         safetensors::Dtype::BF16 => DType::Bfloat16,
         safetensors::Dtype::U32 => DType::UInt32,
         safetensors::Dtype::U8 => DType::Float32, // fallback; quantized types need separate handling
-        _ => DType::Float32, // conservative default
+        _ => DType::Float32,                      // conservative default
     }
 }
 
@@ -282,7 +281,12 @@ mod tests {
 
     #[test]
     fn test_dtype_conversion_roundtrip() {
-        let types = [DType::Float32, DType::Float16, DType::Bfloat16, DType::UInt32];
+        let types = [
+            DType::Float32,
+            DType::Float16,
+            DType::Bfloat16,
+            DType::UInt32,
+        ];
         for dtype in &types {
             let st = dtype_to_safetensors(*dtype);
             let back = safetensors_to_dtype(st);

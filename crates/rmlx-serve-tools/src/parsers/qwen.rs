@@ -11,17 +11,14 @@ use tracing::debug;
 
 use crate::parsers::utils::{generate_tool_call_id, parse_json_tool_call, strip_think_tags};
 use crate::tool_parser::ToolCallParser;
-use crate::types::{
-    DeltaToolCall, ParsedToolCall, StreamingParseResult, ToolCallParseResult,
-};
+use crate::types::{DeltaToolCall, ParsedToolCall, StreamingParseResult, ToolCallParseResult};
 
 static FLOWER_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?s)✿FUNCTION✿:\s*(\S+)\s*\n✿ARGS✿:\s*(.*?)\s*\n✿RESULT✿").unwrap()
 });
 
-static TOOL_CALL_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?s)<tool_call>\s*(.*?)\s*</tool_call>").unwrap()
-});
+static TOOL_CALL_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?s)<tool_call>\s*(.*?)\s*</tool_call>").unwrap());
 
 static QWEN_TOOL_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?s)<\|tool_call_start\|>\s*(.*?)\s*<\|tool_call_end\|>").unwrap()
@@ -157,8 +154,7 @@ impl ToolCallParser for QwenToolParser {
 
         let finished = !all_calls.is_empty()
             && (text.contains("✿RESULT✿")
-                || (text.contains("</tool_call>")
-                    && !text.ends_with("<tool_call>"))
+                || (text.contains("</tool_call>") && !text.ends_with("<tool_call>"))
                 || text.contains("<|tool_call_end|>"));
 
         StreamingParseResult {
@@ -219,7 +215,8 @@ mod tests {
     #[test]
     fn test_qwen_special_format() {
         let parser = QwenToolParser::new();
-        let text = r#"<|tool_call_start|>{"name": "search", "arguments": {"q": "rust"}}<|tool_call_end|>"#;
+        let text =
+            r#"<|tool_call_start|>{"name": "search", "arguments": {"q": "rust"}}<|tool_call_end|>"#;
         let result = parser.parse(text);
         assert_eq!(result.tool_calls.len(), 1);
         assert_eq!(result.tool_calls[0].name, "search");

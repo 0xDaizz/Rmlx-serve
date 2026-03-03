@@ -1463,6 +1463,7 @@ dependencies = [
  "rmlx-serve-cache",
  "rmlx-serve-models",
  "rmlx-serve-sampling",
+ "rmlx-serve-speculative",
  "rmlx-serve-types",
  "serde",
  "thiserror 2.0.18",

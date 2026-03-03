@@ -62,10 +62,7 @@ pub fn log_softmax(logits: &[f32]) -> Vec<f32> {
         .sum::<f32>()
         .ln();
 
-    logits
-        .iter()
-        .map(|&l| l - max_val - log_sum_exp)
-        .collect()
+    logits.iter().map(|&l| l - max_val - log_sum_exp).collect()
 }
 
 /// Returns the top-k (token_id, log_prob) pairs sorted by descending log probability.
@@ -93,9 +90,7 @@ pub fn top_logprobs(logits: &[f32], k: usize) -> Vec<(u32, f32)> {
 
     indexed.truncate(k);
     // Sort the top-k by descending log-prob.
-    indexed.sort_unstable_by(|a, b| {
-        b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
-    });
+    indexed.sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
     indexed
 }

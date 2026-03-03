@@ -126,6 +126,7 @@ impl SpecDecodeRuntime {
         target_probs_fn: &dyn Fn(&[u32]) -> Vec<Vec<f32>>,
     ) -> Result<Vec<u32>, SpecError> {
         // Check if we should re-enable for a probe attempt.
+        let is_probe = !self.enabled;
         if !self.enabled {
             if self.config.probe_interval > 0 {
                 self.steps_since_probe += 1;
@@ -160,8 +161,7 @@ impl SpecDecodeRuntime {
 
         debug!(
             proposer = self.proposer.name(),
-            num_proposed,
-            "generated draft tokens"
+            num_proposed, "generated draft tokens"
         );
 
         // Step 2: Get target model probabilities for all draft positions.
@@ -178,11 +178,9 @@ impl SpecDecodeRuntime {
         }
 
         // Step 3: Verify via rejection sampling.
-        let result = self.sampler.verify(
-            &target_probs,
-            &proposal.probabilities,
-            &proposal.token_ids,
-        );
+        let result =
+            self.sampler
+                .verify(&target_probs, &proposal.probabilities, &proposal.token_ids);
 
         debug!(
             num_proposed,
@@ -207,6 +205,28 @@ impl SpecDecodeRuntime {
             );
             self.enabled = false;
             self.steps_since_probe = 0;
+        }
+
+        // Step 6: After a probe, check if acceptance rate warrants reactivation.
+        if is_probe {
+            let probe_rate = self.metrics.windowed_acceptance_rate();
+            if self.config.auto_disable_threshold > 0.0
+                && probe_rate >= self.config.auto_disable_threshold as f64
+            {
+                info!(
+                    probe_rate = format!("{:.2}", probe_rate),
+                    threshold = self.config.auto_disable_threshold,
+                    "probe succeeded: re-enabling speculative decoding"
+                );
+                self.enabled = true;
+                self.steps_since_probe = 0;
+            } else {
+                debug!(
+                    probe_rate = format!("{:.2}", probe_rate),
+                    threshold = self.config.auto_disable_threshold,
+                    "probe failed: keeping speculative decoding disabled"
+                );
+            }
         }
 
         // Build the final output: accepted tokens + bonus token.
@@ -279,11 +299,7 @@ mod tests {
     }
 
     impl Proposer for FixedProposer {
-        fn propose(
-            &mut self,
-            _context_tokens: &[u32],
-            k: usize,
-        ) -> Result<Proposal, SpecError> {
+        fn propose(&mut self, _context_tokens: &[u32], k: usize) -> Result<Proposal, SpecError> {
             let n = k.min(self.tokens.len());
             Ok(Proposal {
                 token_ids: self.tokens[..n].to_vec(),
@@ -389,7 +405,10 @@ mod tests {
             let _ = runtime.step(&[0], &target_fn);
         }
 
-        assert!(!runtime.is_enabled(), "should auto-disable after low acceptance");
+        assert!(
+            !runtime.is_enabled(),
+            "should auto-disable after low acceptance"
+        );
     }
 
     #[test]

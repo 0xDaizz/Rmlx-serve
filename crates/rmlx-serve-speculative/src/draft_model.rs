@@ -74,7 +74,12 @@ impl Proposer for DraftModelProposer {
         // the KV cache.
         let prefill_logits = self
             .model
-            .forward(context_tokens, Some(&mut cache), &self.registry, &self.queue)
+            .forward(
+                context_tokens,
+                Some(&mut cache),
+                &self.registry,
+                &self.queue,
+            )
             .map_err(|e| SpecError::DraftModelError(format!("prefill failed: {e}")))?;
 
         // Extract the logits from the prefill step (last token position).
@@ -93,7 +98,12 @@ impl Proposer for DraftModelProposer {
         for _ in 1..k {
             let logits = self
                 .model
-                .forward(&[current_token], Some(&mut cache), &self.registry, &self.queue)
+                .forward(
+                    &[current_token],
+                    Some(&mut cache),
+                    &self.registry,
+                    &self.queue,
+                )
                 .map_err(|e| SpecError::DraftModelError(format!("decode step failed: {e}")))?;
 
             let logits_vec: Vec<f32> = logits.to_vec_checked();

@@ -22,13 +22,13 @@ rust-version = "1.80"
 license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
-# RMLX path dependencies
-rmlx-core = { path = "../RMLX/crates/rmlx-core" }
-rmlx-nn = { path = "../RMLX/crates/rmlx-nn" }
-rmlx-metal = { path = "../RMLX/crates/rmlx-metal" }
-rmlx-alloc = { path = "../RMLX/crates/rmlx-alloc" }
-rmlx-distributed = { path = "../RMLX/crates/rmlx-distributed" }
-rmlx-rdma = { path = "../RMLX/crates/rmlx-rdma" }
+# RMLX git dependencies (fetched automatically by cargo)
+rmlx-core = { git = "https://github.com/0xDaizz/RMLX.git" }
+rmlx-nn = { git = "https://github.com/0xDaizz/RMLX.git" }
+rmlx-metal = { git = "https://github.com/0xDaizz/RMLX.git" }
+rmlx-alloc = { git = "https://github.com/0xDaizz/RMLX.git" }
+rmlx-distributed = { git = "https://github.com/0xDaizz/RMLX.git" }
+rmlx-rdma = { git = "https://github.com/0xDaizz/RMLX.git" }
 
 # Internal workspace crates
 rmlx-serve-types = { path = "crates/rmlx-serve-types" }

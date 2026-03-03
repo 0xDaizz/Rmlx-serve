@@ -1279,6 +1279,7 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 [[package]]
 name = "rmlx-alloc"
 version = "0.1.0"
+source = "git+https://github.com/0xDaizz/RMLX.git#93df6fc987a06844639c4e13cbd7817cf679b99b"
 dependencies = [
  "libc",
  "rmlx-metal",
@@ -1287,6 +1288,7 @@ dependencies = [
 [[package]]
 name = "rmlx-core"
 version = "0.1.0"
+source = "git+https://github.com/0xDaizz/RMLX.git#93df6fc987a06844639c4e13cbd7817cf679b99b"
 dependencies = [
  "metal",
  "rmlx-alloc",
@@ -1296,6 +1298,7 @@ dependencies = [
 [[package]]
 name = "rmlx-distributed"
 version = "0.1.0"
+source = "git+https://github.com/0xDaizz/RMLX.git#93df6fc987a06844639c4e13cbd7817cf679b99b"
 dependencies = [
  "metal",
  "rmlx-alloc",
@@ -1307,6 +1310,7 @@ dependencies = [
 [[package]]
 name = "rmlx-metal"
 version = "0.1.0"
+source = "git+https://github.com/0xDaizz/RMLX.git#93df6fc987a06844639c4e13cbd7817cf679b99b"
 dependencies = [
  "block",
  "libc",
@@ -1317,6 +1321,7 @@ dependencies = [
 [[package]]
 name = "rmlx-nn"
 version = "0.1.0"
+source = "git+https://github.com/0xDaizz/RMLX.git#93df6fc987a06844639c4e13cbd7817cf679b99b"
 dependencies = [
  "metal",
  "rmlx-core",
@@ -1325,6 +1330,7 @@ dependencies = [
 [[package]]
 name = "rmlx-rdma"
 version = "0.1.0"
+source = "git+https://github.com/0xDaizz/RMLX.git#93df6fc987a06844639c4e13cbd7817cf679b99b"
 dependencies = [
  "libc",
  "libloading",

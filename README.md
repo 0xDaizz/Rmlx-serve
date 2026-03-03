@@ -146,12 +146,8 @@ Planned (expanding to 100+ via mlx-lm parity):
 ```bash
 # Requirements: Rust 1.80+, macOS with Apple Silicon
 git clone https://github.com/0xDaizz/Rmlx-serve
-cd rmlx-serve
-
-# Ensure RMLX is available at ~/RMLX
+cd Rmlx-serve
 cargo build --release
-
-# Run tests
 cargo test --workspace
 ```
 

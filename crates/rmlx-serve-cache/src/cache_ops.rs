@@ -20,12 +20,8 @@ pub trait CacheOps {
     /// # Returns
     /// A tuple of `(keys, values)` slices covering the full cache from position 0
     /// through (and including) the newly written position.
-    fn update_and_fetch(
-        &mut self,
-        key: &[f32],
-        value: &[f32],
-        position: usize,
-    ) -> (&[f32], &[f32]);
+    fn update_and_fetch(&mut self, key: &[f32], value: &[f32], position: usize)
+        -> (&[f32], &[f32]);
 }
 
 /// Generate a causal attention mask for the given sequence length.
@@ -97,7 +93,7 @@ mod tests {
         let mask = make_causal_mask(2, 3);
         assert_eq!(mask.len(), 2);
         assert_eq!(mask[0].len(), 5); // 2 + 3
-        // Row 0 (logical pos 3): can see [0..3]
+                                      // Row 0 (logical pos 3): can see [0..3]
         assert_eq!(mask[0], vec![0.0, 0.0, 0.0, 0.0, f32::NEG_INFINITY]);
         // Row 1 (logical pos 4): can see [0..4]
         assert_eq!(mask[1], vec![0.0, 0.0, 0.0, 0.0, 0.0]);

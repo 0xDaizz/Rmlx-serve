@@ -55,10 +55,7 @@ pub fn parse_rope_scaling(value: Option<&serde_json::Value>) -> RopeScalingMetho
         None => return RopeScalingMethod::None,
     };
 
-    let factor = obj
-        .get("factor")
-        .and_then(|v| v.as_f64())
-        .unwrap_or(1.0) as f32;
+    let factor = obj.get("factor").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
 
     match scaling_type.as_str() {
         "linear" => RopeScalingMethod::Linear { factor },
@@ -183,8 +180,7 @@ pub fn compute_rope_frequencies_with_scaling(
             let original_max = *original_max_position_embeddings as f32;
             // The attention temperature correction for YaRN
             // is: sqrt(1 + ln(factor) / ln(original_max))
-            let _attn_factor =
-                (1.0 + factor.ln() / original_max.ln()).sqrt();
+            let _attn_factor = (1.0 + factor.ln() / original_max.ln()).sqrt();
 
             // Compute blend weights per dimension.
             // Low-frequency dimensions (small inv_freq, large wavelength)
@@ -192,8 +188,7 @@ pub fn compute_rope_frequencies_with_scaling(
             // dimensions should keep original frequencies (blend -> 0.0).
             let blend: Vec<f32> = (0..half_dim)
                 .map(|i| {
-                    let freq =
-                        theta.powf(-2.0 * (i as f32) / (head_dim as f32));
+                    let freq = theta.powf(-2.0 * (i as f32) / (head_dim as f32));
                     let wavelength = 2.0 * std::f32::consts::PI / freq;
                     // Wavelengths shorter than original_max are high-freq
                     // (keep original), longer are low-freq (interpolate).
@@ -219,8 +214,7 @@ pub fn compute_rope_frequencies_with_scaling(
             // linearly-scaled frequency.
             let final_freq = if let Some(ref blend) = yarn_blend {
                 // Original (unscaled) frequency for this dimension
-                let orig_inv_freq =
-                    theta.powf(-2.0 * (i as f32) / (head_dim as f32));
+                let orig_inv_freq = theta.powf(-2.0 * (i as f32) / (head_dim as f32));
                 let orig_freq = scaled_pos * orig_inv_freq;
                 // Blend: 0.0 = use NTK-scaled, 1.0 = use original
                 blend[i] * orig_freq + (1.0 - blend[i]) * freq
@@ -302,8 +296,7 @@ mod tests {
 
     #[test]
     fn test_parse_rope_scaling_linear() {
-        let val: serde_json::Value =
-            serde_json::json!({"type": "linear", "factor": 2.0});
+        let val: serde_json::Value = serde_json::json!({"type": "linear", "factor": 2.0});
         let result = parse_rope_scaling(Some(&val));
         match result {
             RopeScalingMethod::Linear { factor } => {
@@ -315,8 +308,7 @@ mod tests {
 
     #[test]
     fn test_parse_rope_scaling_dynamic_ntk() {
-        let val: serde_json::Value =
-            serde_json::json!({"type": "dynamic", "factor": 2.0});
+        let val: serde_json::Value = serde_json::json!({"type": "dynamic", "factor": 2.0});
         let result = parse_rope_scaling(Some(&val));
         match result {
             RopeScalingMethod::Ntk { factor } => {
@@ -394,8 +386,7 @@ mod tests {
         let theta = 10000.0f32;
         let factor = 2.0f32;
 
-        let expected_theta =
-            theta * factor.powf((head_dim as f32) / ((head_dim as f32) - 2.0));
+        let expected_theta = theta * factor.powf((head_dim as f32) / ((head_dim as f32) - 2.0));
 
         // Verify the effective theta is larger than the original
         assert!(expected_theta > theta);
@@ -404,10 +395,8 @@ mod tests {
         // is the same negative value, so the result is smaller (the
         // frequency decays faster in absolute terms, meaning lower
         // frequencies overall). This stretches the positional range.
-        let inv_freq_standard =
-            theta.powf(-2.0 * 1.0 / (head_dim as f32));
-        let inv_freq_ntk =
-            expected_theta.powf(-2.0 * 1.0 / (head_dim as f32));
+        let inv_freq_standard = theta.powf(-2.0 * 1.0 / (head_dim as f32));
+        let inv_freq_ntk = expected_theta.powf(-2.0 * 1.0 / (head_dim as f32));
 
         // Larger base -> smaller inv_freq for i > 0 (frequencies are lower)
         assert!(

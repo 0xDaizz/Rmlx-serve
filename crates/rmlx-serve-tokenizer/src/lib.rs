@@ -25,8 +25,8 @@ pub mod tokenizer;
 pub use chat_template::{ChatTemplate, TemplateMessage};
 pub use detokenizer::{
     create_detokenizer, detect_type, is_thinking_token, is_tool_call_token,
-    BPEStreamingDetokenizer, DetokenizerType, NaiveStreamingDetokenizer,
-    SPMStreamingDetokenizer, StreamingDetokenizer, ThinkingBoundary, ToolCallBoundary,
+    BPEStreamingDetokenizer, DetokenizerType, NaiveStreamingDetokenizer, SPMStreamingDetokenizer,
+    StreamingDetokenizer, ThinkingBoundary, ToolCallBoundary,
 };
 pub use error::{Result, TokenizerError};
 pub use tokenizer::Tokenizer;

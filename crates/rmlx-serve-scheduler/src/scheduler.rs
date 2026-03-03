@@ -18,7 +18,7 @@ use rmlx_serve_cache::{BatchKVCache, KVCache, PrefixCacheManager};
 use rmlx_serve_models::LlmModel;
 use rmlx_serve_sampling::{make_logits_processors, make_sampler, LogitsProcessor, SamplerFn};
 use rmlx_serve_speculative::{
-    NgramProposer, MtpProposer, SpecDecodeConfig, SpecDecodeRuntime, SpecMethod,
+    MtpProposer, NgramProposer, SpecDecodeConfig, SpecDecodeRuntime, SpecMethod,
 };
 use rmlx_serve_types::config::{CacheConfig, EngineConfig, SchedulerConfig};
 use rmlx_serve_types::{FinishReason, Request, RequestId};
@@ -217,11 +217,7 @@ impl Scheduler {
     /// * `config` - Scheduler configuration (max_num_seqs, policy, etc.).
     /// * `model` - Reference to the model (for cache dimensions).
     /// * `device` - Metal device for KV cache allocation.
-    pub fn new(
-        config: SchedulerConfig,
-        model: &dyn LlmModel,
-        _device: &metal::Device,
-    ) -> Self {
+    pub fn new(config: SchedulerConfig, model: &dyn LlmModel, _device: &metal::Device) -> Self {
         Self::new_inner(config, model, None)
     }
 
@@ -347,7 +343,10 @@ impl Scheduler {
                     auto_disable_threshold: threshold,
                     probe_interval: window,
                 };
-                info!(method = "mtp", k, num_predict, "speculative decoding enabled");
+                info!(
+                    method = "mtp",
+                    k, num_predict, "speculative decoding enabled"
+                );
                 Some(SpecDecodeRuntime::new(config, Box::new(proposer)))
             }
             "draft" => {
@@ -731,9 +730,7 @@ impl Scheduler {
     /// Whether there is any pending work (waiting or running requests,
     /// or pending prefills in the batch generator).
     pub fn has_pending_work(&self) -> bool {
-        !self.waiting.is_empty()
-            || !self.running.is_empty()
-            || !self.batch_generator.is_idle()
+        !self.waiting.is_empty() || !self.running.is_empty() || !self.batch_generator.is_idle()
     }
 
     /// Reference to the batch generator's statistics.
@@ -769,9 +766,7 @@ impl Scheduler {
 
     /// Whether speculative decoding is configured and active.
     pub fn has_spec_decode(&self) -> bool {
-        self.spec_runtime
-            .as_ref()
-            .is_some_and(|rt| rt.is_enabled())
+        self.spec_runtime.as_ref().is_some_and(|rt| rt.is_enabled())
     }
 
     /// Reference to the speculative decoding runtime, if configured.
@@ -814,9 +809,8 @@ impl Scheduler {
 
         // Collect running sequence IDs and their context tokens from the
         // batch generator's decode batch.
-        let decode_contexts: Vec<(crate::batch::SequenceId, Vec<u32>)> = self
-            .batch_generator
-            .active_sequences_context();
+        let decode_contexts: Vec<(crate::batch::SequenceId, Vec<u32>)> =
+            self.batch_generator.active_sequences_context();
 
         if decode_contexts.is_empty() {
             return Vec::new();

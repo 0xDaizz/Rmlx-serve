@@ -133,8 +133,7 @@ pub async fn chat_completions(
     }
 }
 
-type SseStream =
-    Pin<Box<dyn futures_core::Stream<Item = Result<Event, Infallible>> + Send>>;
+type SseStream = Pin<Box<dyn futures_core::Stream<Item = Result<Event, Infallible>> + Send>>;
 
 /// Mutable state carried across streaming iterations via `unfold`.
 struct ChatStreamState {
@@ -253,7 +252,11 @@ async fn stream_chat_completion(
                             st.created,
                             comp.index,
                             &st.request_id,
-                            if sp.tool_calls.is_empty() { finish } else { None },
+                            if sp.tool_calls.is_empty() {
+                                finish
+                            } else {
+                                None
+                            },
                             st.is_first,
                         );
                         st.is_first = false;
@@ -270,7 +273,11 @@ async fn stream_chat_completion(
                         .map(delta_tool_call_to_openai)
                         .collect();
 
-                    let tc_finish = if sp.finished { Some("tool_calls") } else { None };
+                    let tc_finish = if sp.finished {
+                        Some("tool_calls")
+                    } else {
+                        None
+                    };
 
                     let chunk = rmlx_serve_types::openai::ChatCompletionChunk {
                         id: st.request_id.clone(),

@@ -29,6 +29,7 @@ pub mod rotating_cache;
 
 // ── Re-exports of core types ──
 pub use batch_cache::BatchKVCache;
+pub use cache_ops::{make_causal_mask, CacheOps};
 pub use error::{CacheError, Result};
 pub use kv_cache::KVCache;
 pub use memory::MemoryAwarePrefixCache;
@@ -39,5 +40,4 @@ pub use prompt_cache::{
     trim_prompt_cache,
 };
 pub use quantized_cache::QuantizedKVCache;
-pub use cache_ops::{make_causal_mask, CacheOps};
 pub use rotating_cache::RotatingKVCache;

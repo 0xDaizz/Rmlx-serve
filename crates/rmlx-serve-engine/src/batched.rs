@@ -34,8 +34,7 @@ use rmlx_serve_models::{load_model, LlmModel};
 use rmlx_serve_scheduler::Scheduler;
 use rmlx_serve_tokenizer::{create_detokenizer, StreamingDetokenizer, Tokenizer};
 use rmlx_serve_types::{
-    CompletionOutput, EngineConfig, Request, RequestId, RequestMetrics, RequestOutput,
-    TokenLogprob,
+    CompletionOutput, EngineConfig, Request, RequestId, RequestMetrics, RequestOutput, TokenLogprob,
 };
 
 use crate::{Engine, EngineError, EngineHealth, EngineStats};
@@ -128,12 +127,20 @@ impl BatchedEngine {
         let queue = device.new_command_queue();
         let registry = KernelRegistry::new(device);
         ops::register_all(&registry)?;
-        info!(device = registry.device().name(), aot = registry.has_aot(), "GPU kernels registered");
+        info!(
+            device = registry.device().name(),
+            aot = registry.has_aot(),
+            "GPU kernels registered"
+        );
 
         let device2 = GpuDevice::system_default()
             .map_err(|e| EngineError::Internal(format!("failed to acquire Metal device: {e}")))?;
         let scheduler = Scheduler::new(config.scheduler.clone(), model.as_ref(), device2.raw());
-        info!(max_num_seqs = config.scheduler.max_num_seqs, max_model_len = config.scheduler.max_model_len, "scheduler created");
+        info!(
+            max_num_seqs = config.scheduler.max_num_seqs,
+            max_model_len = config.scheduler.max_model_len,
+            "scheduler created"
+        );
 
         let stream_interval = config.scheduler.stream_interval.max(1);
         let (request_tx, request_rx) = mpsc::channel::<EngineRequest>(256);
@@ -157,22 +164,42 @@ impl BatchedEngine {
             .map_err(|e| EngineError::Internal(format!("failed to acquire Metal device: {e}")))?;
 
         tokio::spawn(engine_loop(
-            request_rx, abort_rx, shutdown_rx, model, tokenizer_clone, scheduler,
-            registry, queue, stats_clone, health_clone, start_time,
-            stream_interval, loop_device,
+            request_rx,
+            abort_rx,
+            shutdown_rx,
+            model,
+            tokenizer_clone,
+            scheduler,
+            registry,
+            queue,
+            stats_clone,
+            health_clone,
+            start_time,
+            stream_interval,
+            loop_device,
         ));
         info!("BatchedEngine engine_loop spawned");
 
         Ok(Self {
-            request_tx, abort_tx, tokenizer, model_name: model_path,
-            stats, health, start_time, running, shutdown_tx, stream_interval,
+            request_tx,
+            abort_tx,
+            tokenizer,
+            model_name: model_path,
+            stats,
+            health,
+            start_time,
+            running,
+            shutdown_tx,
+            stream_interval,
         })
     }
 }
 
 #[async_trait]
 impl Engine for BatchedEngine {
-    fn model_name(&self) -> &str { &self.model_name }
+    fn model_name(&self) -> &str {
+        &self.model_name
+    }
 
     async fn generate(&self, request: Request) -> Result<RequestOutput, EngineError> {
         let mut rx = self.generate_stream(request).await?;
@@ -180,9 +207,12 @@ impl Engine for BatchedEngine {
         while let Some(output) = rx.recv().await {
             let finished = output.finished;
             last_output = Some(output);
-            if finished { break; }
+            if finished {
+                break;
+            }
         }
-        last_output.ok_or_else(|| EngineError::Internal("no output received from engine loop".into()))
+        last_output
+            .ok_or_else(|| EngineError::Internal("no output received from engine loop".into()))
     }
 
     async fn generate_stream(
@@ -191,27 +221,40 @@ impl Engine for BatchedEngine {
     ) -> Result<mpsc::UnboundedReceiver<RequestOutput>, EngineError> {
         let (response_tx, response_rx) = mpsc::unbounded_channel::<RequestOutput>();
         self.request_tx
-            .send(EngineRequest::Generate { request, response_tx })
+            .send(EngineRequest::Generate {
+                request,
+                response_tx,
+            })
             .await
             .map_err(|_| EngineError::Internal("engine loop has shut down".into()))?;
         Ok(response_rx)
     }
 
-    async fn health(&self) -> EngineHealth { self.health.read().await.clone() }
+    async fn health(&self) -> EngineHealth {
+        self.health.read().await.clone()
+    }
 
     fn get_stats(&self) -> EngineStats {
         match self.stats.try_read() {
-            Ok(guard) => { let mut s = guard.clone(); s.uptime_secs = self.start_time.elapsed().as_secs_f64(); s }
+            Ok(guard) => {
+                let mut s = guard.clone();
+                s.uptime_secs = self.start_time.elapsed().as_secs_f64();
+                s
+            }
             Err(_) => EngineStats::default(),
         }
     }
 
     fn encode(&self, text: &str) -> Result<Vec<u32>, EngineError> {
-        self.tokenizer.encode(text, true).map_err(|e| EngineError::Tokenizer(e.to_string()))
+        self.tokenizer
+            .encode(text, true)
+            .map_err(|e| EngineError::Tokenizer(e.to_string()))
     }
 
     fn decode(&self, token_ids: &[u32]) -> Result<String, EngineError> {
-        self.tokenizer.decode(token_ids, true).map_err(|e| EngineError::Tokenizer(e.to_string()))
+        self.tokenizer
+            .decode(token_ids, true)
+            .map_err(|e| EngineError::Tokenizer(e.to_string()))
     }
 }
 
@@ -301,14 +344,19 @@ async fn engine_loop(
 
                             if state.first_token_time.is_none() {
                                 state.first_token_time = Some(
-                                    state.start_instant.elapsed().as_secs_f64() + state.arrival_time,
+                                    state.start_instant.elapsed().as_secs_f64()
+                                        + state.arrival_time,
                                 );
                             }
 
                             if let (Some(_k), Some(lps)) = (state.logprobs_k, &response.logprobs) {
                                 state.logprobs.push(TokenLogprob {
                                     token_id: token,
-                                    logprob: lps.iter().find(|(id, _)| *id == token).map(|(_, lp)| *lp).unwrap_or(f32::NEG_INFINITY),
+                                    logprob: lps
+                                        .iter()
+                                        .find(|(id, _)| *id == token)
+                                        .map(|(_, lp)| *lp)
+                                        .unwrap_or(f32::NEG_INFINITY),
                                     top_logprobs: lps.clone(),
                                 });
                             }
@@ -319,7 +367,8 @@ async fn engine_loop(
 
                             // Emit a streaming response every `stream_interval`
                             // tokens, or always on the final token.
-                            let should_emit = is_finished || state.tokens_since_emit >= stream_interval;
+                            let should_emit =
+                                is_finished || state.tokens_since_emit >= stream_interval;
                             if !should_emit {
                                 // Accumulate text but don't send yet.
                                 let segment = state.detokenizer.last_segment().to_string();
@@ -332,7 +381,11 @@ async fn engine_loop(
 
                             let text_delta = if is_finished {
                                 let remaining = state.detokenizer.finalize();
-                                if remaining.is_empty() { segment } else { format!("{}{}", segment, remaining) }
+                                if remaining.is_empty() {
+                                    segment
+                                } else {
+                                    format!("{}{}", segment, remaining)
+                                }
                             } else {
                                 segment
                             };
@@ -340,7 +393,8 @@ async fn engine_loop(
                             state.text.push_str(&text_delta);
 
                             let metrics = if is_finished {
-                                let finish_time = state.start_instant.elapsed().as_secs_f64() + state.arrival_time;
+                                let finish_time = state.start_instant.elapsed().as_secs_f64()
+                                    + state.arrival_time;
                                 Some(RequestMetrics {
                                     arrival_time: state.arrival_time,
                                     first_token_time: state.first_token_time,
@@ -369,16 +423,23 @@ async fn engine_loop(
                         }
                     }
 
-                    let finished_ids: Vec<RequestId> = output.responses.iter()
-                        .filter(|r| r.finish_reason.is_some()).map(|r| r.request_id).collect();
+                    let finished_ids: Vec<RequestId> = output
+                        .responses
+                        .iter()
+                        .filter(|r| r.finish_reason.is_some())
+                        .map(|r| r.request_id)
+                        .collect();
                     for id in &finished_ids {
                         if let Some(st) = request_states.remove(id) {
                             debug!(request_id = %id, tokens = st.generated_tokens.len(), "request finished");
                         }
                     }
 
-                    let dropped_ids: Vec<RequestId> = request_states.iter()
-                        .filter(|(_, st)| st.response_tx.is_closed()).map(|(id, _)| *id).collect();
+                    let dropped_ids: Vec<RequestId> = request_states
+                        .iter()
+                        .filter(|(_, st)| st.response_tx.is_closed())
+                        .map(|(id, _)| *id)
+                        .collect();
                     for id in &dropped_ids {
                         scheduler.abort_request(id);
                         request_states.remove(id);
@@ -398,7 +459,9 @@ async fn engine_loop(
                         h.active_requests = request_states.len();
                     }
                 }
-                Err(e) => { warn!("scheduler step failed: {e}"); }
+                Err(e) => {
+                    warn!("scheduler step failed: {e}");
+                }
             }
         }
 
@@ -413,7 +476,10 @@ fn handle_new_request(
     scheduler: &mut Scheduler,
     request_states: &mut HashMap<RequestId, RequestState>,
 ) {
-    let EngineRequest::Generate { request, response_tx } = engine_request;
+    let EngineRequest::Generate {
+        request,
+        response_tx,
+    } = engine_request;
     let request_id = request.id;
     let prompt_tokens = request.prompt_token_ids.len();
     let logprobs_k = request.sampling_params.logprobs;
@@ -422,12 +488,22 @@ fn handle_new_request(
     debug!(request_id = %request_id, prompt_tokens, max_tokens = request.sampling_params.max_tokens, "new request submitted to engine");
 
     let detokenizer = create_detokenizer(tokenizer);
-    request_states.insert(request_id, RequestState {
-        response_tx, generated_tokens: Vec::new(), logprobs: Vec::new(),
-        detokenizer, text: String::new(), prompt_tokens, arrival_time,
-        first_token_time: None, start_instant: Instant::now(), logprobs_k,
-        tokens_since_emit: 0,
-    });
+    request_states.insert(
+        request_id,
+        RequestState {
+            response_tx,
+            generated_tokens: Vec::new(),
+            logprobs: Vec::new(),
+            detokenizer,
+            text: String::new(),
+            prompt_tokens,
+            arrival_time,
+            first_token_time: None,
+            start_instant: Instant::now(),
+            logprobs_k,
+            tokens_since_emit: 0,
+        },
+    );
     scheduler.add_request(request);
 }
 

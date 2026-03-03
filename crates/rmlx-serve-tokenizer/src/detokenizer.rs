@@ -45,7 +45,10 @@ pub enum ToolCallBoundary {
 /// Recognised patterns:
 /// - `<think>` / `</think>`
 /// - `<|begin_of_thought|>` / `<|end_of_thought|>`
-pub fn is_thinking_token(tokenizer: &tokenizers::Tokenizer, token_id: u32) -> Option<ThinkingBoundary> {
+pub fn is_thinking_token(
+    tokenizer: &tokenizers::Tokenizer,
+    token_id: u32,
+) -> Option<ThinkingBoundary> {
     let token_str = tokenizer.id_to_token(token_id)?;
     match token_str.as_str() {
         "<think>" | "<|begin_of_thought|>" => Some(ThinkingBoundary::Start),
@@ -59,7 +62,10 @@ pub fn is_thinking_token(tokenizer: &tokenizers::Tokenizer, token_id: u32) -> Op
 /// Recognised patterns:
 /// - `<tool_call>` / `</tool_call>`
 /// - `<|tool_calls_begin|>` / `<|tool_calls_end|>`
-pub fn is_tool_call_token(tokenizer: &tokenizers::Tokenizer, token_id: u32) -> Option<ToolCallBoundary> {
+pub fn is_tool_call_token(
+    tokenizer: &tokenizers::Tokenizer,
+    token_id: u32,
+) -> Option<ToolCallBoundary> {
     let token_str = tokenizer.id_to_token(token_id)?;
     match token_str.as_str() {
         "<tool_call>" | "<|tool_calls_begin|>" => Some(ToolCallBoundary::Start),

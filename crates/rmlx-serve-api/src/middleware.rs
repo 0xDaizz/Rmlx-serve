@@ -43,9 +43,7 @@ pub async fn auth_middleware(
             Some(header) if header.starts_with("Bearer ") => {
                 let provided_key = &header["Bearer ".len()..];
                 if !bool::from(provided_key.as_bytes().ct_eq(expected_key.as_bytes())) {
-                    return Err(ApiError::Unauthorized(
-                        "Invalid API key provided.".into(),
-                    ));
+                    return Err(ApiError::Unauthorized("Invalid API key provided.".into()));
                 }
             }
             _ => {

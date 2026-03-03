@@ -13,9 +13,7 @@ use crate::state::AppState;
 ///
 /// Returns the list of MCP tools available across all connected servers.
 /// Currently returns an empty list as MCP integration is not yet implemented.
-pub async fn mcp_list_tools(
-    State(_state): State<Arc<AppState>>,
-) -> Json<Vec<MCPTool>> {
+pub async fn mcp_list_tools(State(_state): State<Arc<AppState>>) -> Json<Vec<MCPTool>> {
     Json(vec![])
 }
 
@@ -23,8 +21,6 @@ pub async fn mcp_list_tools(
 ///
 /// Returns the list of connected MCP servers and their status.
 /// Currently returns an empty list as MCP integration is not yet implemented.
-pub async fn mcp_list_servers(
-    State(_state): State<Arc<AppState>>,
-) -> Json<Vec<MCPServerStatus>> {
+pub async fn mcp_list_servers(State(_state): State<Arc<AppState>>) -> Json<Vec<MCPServerStatus>> {
     Json(vec![])
 }

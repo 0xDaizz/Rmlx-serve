@@ -53,9 +53,11 @@ pub async fn chat_completions(
 
     // 4. Streaming vs non-streaming.
     if req.stream.unwrap_or(false) {
-        Ok(stream_chat_completion(state, internal_request, model, prompt_tokens)
-            .await
-            .into_response())
+        Ok(
+            stream_chat_completion(state, internal_request, model, prompt_tokens)
+                .await
+                .into_response(),
+        )
     } else {
         // Non-streaming: generate and return full response.
         let output = state.engine.generate(internal_request).await?;
@@ -65,8 +67,7 @@ pub async fn chat_completions(
     }
 }
 
-type SseStream =
-    Pin<Box<dyn futures_core::Stream<Item = Result<Event, Infallible>> + Send>>;
+type SseStream = Pin<Box<dyn futures_core::Stream<Item = Result<Event, Infallible>> + Send>>;
 
 /// Build SSE stream for a streaming chat completion.
 async fn stream_chat_completion(
@@ -93,41 +94,40 @@ async fn stream_chat_completion(
     let rx_stream = UnboundedReceiverStream::new(receiver);
 
     let mut is_first = true;
-    let event_stream = rx_stream
-        .flat_map(move |output| {
-            let mut events: Vec<Result<Event, Infallible>> = Vec::new();
+    let event_stream = rx_stream.flat_map(move |output| {
+        let mut events: Vec<Result<Event, Infallible>> = Vec::new();
 
-            for comp in &output.outputs {
-                let delta_text = &comp.text;
-                let finish = if output.finished {
-                    comp.finish_reason
-                } else {
-                    None
-                };
+        for comp in &output.outputs {
+            let delta_text = &comp.text;
+            let finish = if output.finished {
+                comp.finish_reason
+            } else {
+                None
+            };
 
-                let chunk = internal_to_chat_chunk(
-                    delta_text,
-                    &model,
-                    created,
-                    comp.index,
-                    &request_id,
-                    finish,
-                    is_first,
-                );
+            let chunk = internal_to_chat_chunk(
+                delta_text,
+                &model,
+                created,
+                comp.index,
+                &request_id,
+                finish,
+                is_first,
+            );
 
-                is_first = false;
+            is_first = false;
 
-                let json = serde_json::to_string(&chunk).unwrap_or_default();
-                events.push(Ok(Event::default().data(json)));
-            }
+            let json = serde_json::to_string(&chunk).unwrap_or_default();
+            events.push(Ok(Event::default().data(json)));
+        }
 
-            // If the output is finished, send the [DONE] sentinel.
-            if output.finished {
-                events.push(Ok(Event::default().data(SSE_DONE.to_string())));
-            }
+        // If the output is finished, send the [DONE] sentinel.
+        if output.finished {
+            events.push(Ok(Event::default().data(SSE_DONE)));
+        }
 
-            futures_util::stream::iter(events)
-        });
+        futures_util::stream::iter(events)
+    });
 
     let boxed: SseStream = Box::pin(event_stream);
     Sse::new(boxed)

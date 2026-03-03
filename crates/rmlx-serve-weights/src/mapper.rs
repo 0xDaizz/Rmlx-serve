@@ -246,20 +246,12 @@ impl WeightMapper for MixtralWeightMapper {
 
                 _ => {
                     // MoE expert weights: block_sparse_moe.experts.{e}.{w1,w2,w3}.weight
-                    if let Some(expert_rest) =
-                        suffix.strip_prefix("block_sparse_moe.")
-                    {
+                    if let Some(expert_rest) = suffix.strip_prefix("block_sparse_moe.") {
                         if let Some((expert, weight_name)) = parse_expert_index(expert_rest) {
                             match weight_name {
-                                "w1.weight" => {
-                                    WeightComponent::ExpertGateProj { layer, expert }
-                                }
-                                "w2.weight" => {
-                                    WeightComponent::ExpertDownProj { layer, expert }
-                                }
-                                "w3.weight" => {
-                                    WeightComponent::ExpertUpProj { layer, expert }
-                                }
+                                "w1.weight" => WeightComponent::ExpertGateProj { layer, expert },
+                                "w2.weight" => WeightComponent::ExpertDownProj { layer, expert },
+                                "w3.weight" => WeightComponent::ExpertUpProj { layer, expert },
                                 _ => {
                                     trace!(
                                         name = hf_name,
@@ -269,10 +261,7 @@ impl WeightMapper for MixtralWeightMapper {
                                 }
                             }
                         } else {
-                            trace!(
-                                name = hf_name,
-                                "skipping unrecognized mixtral MoE weight"
-                            );
+                            trace!(name = hf_name, "skipping unrecognized mixtral MoE weight");
                             return None;
                         }
                     } else {
@@ -365,9 +354,7 @@ impl WeightMapper for DeepSeekWeightMapper {
                                 "gate_proj.weight" => {
                                     WeightComponent::ExpertGateProj { layer, expert }
                                 }
-                                "up_proj.weight" => {
-                                    WeightComponent::ExpertUpProj { layer, expert }
-                                }
+                                "up_proj.weight" => WeightComponent::ExpertUpProj { layer, expert },
                                 "down_proj.weight" => {
                                     WeightComponent::ExpertDownProj { layer, expert }
                                 }
@@ -380,10 +367,7 @@ impl WeightMapper for DeepSeekWeightMapper {
                                 }
                             }
                         } else {
-                            trace!(
-                                name = hf_name,
-                                "skipping unrecognized deepseek MLP weight"
-                            );
+                            trace!(name = hf_name, "skipping unrecognized deepseek MLP weight");
                             return None;
                         }
                     } else {
@@ -561,9 +545,7 @@ mod tests {
     fn test_deepseek_mapper_moe() {
         let mapper = DeepSeekWeightMapper;
 
-        let mapped = mapper
-            .map_name("model.layers.4.mlp.gate.weight")
-            .unwrap();
+        let mapped = mapper.map_name("model.layers.4.mlp.gate.weight").unwrap();
         assert_eq!(mapped.component, WeightComponent::GateWeight { layer: 4 });
 
         let mapped = mapper

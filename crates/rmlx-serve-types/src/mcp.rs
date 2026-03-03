@@ -136,9 +136,7 @@ pub enum MCPToolResultContent {
     },
 
     /// An embedded resource.
-    Resource {
-        resource: MCPResource,
-    },
+    Resource { resource: MCPResource },
 }
 
 /// An embedded resource in an MCP tool result.
@@ -177,7 +175,6 @@ pub enum MCPServerState {
     /// The server has been intentionally stopped.
     Stopped,
 }
-
 
 /// Runtime information about a connected MCP server.
 #[derive(Clone, Debug, Serialize, Deserialize)]

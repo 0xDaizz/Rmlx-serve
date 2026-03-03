@@ -63,13 +63,16 @@ pub struct ScheduledResponse {
 // Internal request tracking
 // ---------------------------------------------------------------------------
 
+/// A sampler function that takes logits and returns a token ID.
+pub type SamplerFn = Box<dyn Fn(&[f32]) -> u32 + Send>;
+
 /// A request waiting to be admitted into the batch generator.
 pub struct WaitingRequest {
     /// The original request.
     pub request: Request,
 
     /// Pre-built sampler closure.
-    pub sampler: Box<dyn Fn(&[f32]) -> u32 + Send>,
+    pub sampler: SamplerFn,
 
     /// Pre-built logits processors.
     pub logits_processors: Vec<Box<dyn LogitsProcessor>>,
@@ -143,11 +146,7 @@ impl Scheduler {
     /// * `config` - Scheduler configuration (max_num_seqs, policy, etc.).
     /// * `model` - Reference to the model (for cache dimensions).
     /// * `device` - Metal device for KV cache allocation.
-    pub fn new(
-        config: SchedulerConfig,
-        model: &dyn LlmModel,
-        _device: &metal::Device,
-    ) -> Self {
+    pub fn new(config: SchedulerConfig, model: &dyn LlmModel, _device: &metal::Device) -> Self {
         let batch_config = BatchGeneratorConfig {
             prefill_batch_size: config.max_num_seqs.min(4),
             completion_batch_size: config.max_num_seqs,
@@ -346,9 +345,7 @@ impl Scheduler {
             );
 
             // Track the admitted requests.
-            for (seq_id, (request_id, max_tokens)) in
-                seq_ids.iter().zip(admitted_requests.iter())
-            {
+            for (seq_id, (request_id, max_tokens)) in seq_ids.iter().zip(admitted_requests.iter()) {
                 self.running.insert(
                     *request_id,
                     RunningRequest {
@@ -452,9 +449,7 @@ impl Scheduler {
     /// Whether there is any pending work (waiting or running requests,
     /// or pending prefills in the batch generator).
     pub fn has_pending_work(&self) -> bool {
-        !self.waiting.is_empty()
-            || !self.running.is_empty()
-            || !self.batch_generator.is_idle()
+        !self.waiting.is_empty() || !self.running.is_empty() || !self.batch_generator.is_idle()
     }
 
     /// Reference to the batch generator's statistics.

@@ -54,7 +54,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Respect the RUST_LOG environment variable.  If unset, default to `info`
     // for our own crates and `warn` for everything else.
     let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-        EnvFilter::new("rmlx_serve=info,rmlx_serve_cli=info,rmlx_serve_engine=info,rmlx_serve_api=info,warn")
+        EnvFilter::new(
+            "rmlx_serve=info,rmlx_serve_cli=info,rmlx_serve_engine=info,rmlx_serve_api=info,warn",
+        )
     });
 
     tracing_subscriber::fmt()

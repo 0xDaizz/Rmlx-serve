@@ -161,8 +161,7 @@ impl SpecDecodeRuntime {
 
         debug!(
             proposer = self.proposer.name(),
-            num_proposed,
-            "generated draft tokens"
+            num_proposed, "generated draft tokens"
         );
 
         // Step 2: Get target model probabilities for all draft positions.
@@ -179,11 +178,9 @@ impl SpecDecodeRuntime {
         }
 
         // Step 3: Verify via rejection sampling.
-        let result = self.sampler.verify(
-            &target_probs,
-            &proposal.probabilities,
-            &proposal.token_ids,
-        );
+        let result =
+            self.sampler
+                .verify(&target_probs, &proposal.probabilities, &proposal.token_ids);
 
         debug!(
             num_proposed,
@@ -302,11 +299,7 @@ mod tests {
     }
 
     impl Proposer for FixedProposer {
-        fn propose(
-            &mut self,
-            _context_tokens: &[u32],
-            k: usize,
-        ) -> Result<Proposal, SpecError> {
+        fn propose(&mut self, _context_tokens: &[u32], k: usize) -> Result<Proposal, SpecError> {
             let n = k.min(self.tokens.len());
             Ok(Proposal {
                 token_ids: self.tokens[..n].to_vec(),
@@ -412,7 +405,10 @@ mod tests {
             let _ = runtime.step(&[0], &target_fn);
         }
 
-        assert!(!runtime.is_enabled(), "should auto-disable after low acceptance");
+        assert!(
+            !runtime.is_enabled(),
+            "should auto-disable after low acceptance"
+        );
     }
 
     #[test]

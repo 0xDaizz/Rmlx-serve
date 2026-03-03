@@ -46,9 +46,7 @@ impl KVCache {
         dtype: DType,
     ) -> Self {
         let inner = (0..num_layers)
-            .map(|_| {
-                LayerKvCache::preallocated(device, num_kv_heads, head_dim, max_seq_len, dtype)
-            })
+            .map(|_| LayerKvCache::preallocated(device, num_kv_heads, head_dim, max_seq_len, dtype))
             .collect();
         Self { inner, num_layers }
     }

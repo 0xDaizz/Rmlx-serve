@@ -135,9 +135,8 @@ impl ModelConfig {
         }
 
         let content = std::fs::read_to_string(&config_path)?;
-        let config: ModelConfig = serde_json::from_str(&content).map_err(|e| {
-            WeightError::InvalidConfig(format!("failed to parse config.json: {e}"))
-        })?;
+        let config: ModelConfig = serde_json::from_str(&content)
+            .map_err(|e| WeightError::InvalidConfig(format!("failed to parse config.json: {e}")))?;
 
         debug!(
             model_type = %config.model_type,
@@ -175,25 +174,23 @@ impl ModelConfig {
     ///
     /// Returns `None` if `torch_dtype` is not set or maps to an unsupported type.
     pub fn dtype(&self) -> Option<DType> {
-        self.torch_dtype
-            .as_deref()
-            .and_then(torch_dtype_to_rmlx)
+        self.torch_dtype.as_deref().and_then(torch_dtype_to_rmlx)
     }
 
     /// Convert this HuggingFace config into the RMLX TransformerConfig.
     pub fn to_transformer_config(&self) -> Result<TransformerConfig> {
-        let hidden_size = self.hidden_size.ok_or_else(|| {
-            WeightError::InvalidConfig("missing hidden_size".into())
-        })?;
-        let num_heads = self.num_attention_heads.ok_or_else(|| {
-            WeightError::InvalidConfig("missing num_attention_heads".into())
-        })?;
-        let num_layers = self.num_hidden_layers.ok_or_else(|| {
-            WeightError::InvalidConfig("missing num_hidden_layers".into())
-        })?;
-        let vocab_size = self.vocab_size.ok_or_else(|| {
-            WeightError::InvalidConfig("missing vocab_size".into())
-        })?;
+        let hidden_size = self
+            .hidden_size
+            .ok_or_else(|| WeightError::InvalidConfig("missing hidden_size".into()))?;
+        let num_heads = self
+            .num_attention_heads
+            .ok_or_else(|| WeightError::InvalidConfig("missing num_attention_heads".into()))?;
+        let num_layers = self
+            .num_hidden_layers
+            .ok_or_else(|| WeightError::InvalidConfig("missing num_hidden_layers".into()))?;
+        let vocab_size = self
+            .vocab_size
+            .ok_or_else(|| WeightError::InvalidConfig("missing vocab_size".into()))?;
 
         let num_kv_heads = self.effective_num_kv_heads();
         let head_dim = self.effective_head_dim();
@@ -217,9 +214,9 @@ impl ModelConfig {
                 },
             }
         } else {
-            let intermediate_dim = self.intermediate_size.ok_or_else(|| {
-                WeightError::InvalidConfig("missing intermediate_size".into())
-            })?;
+            let intermediate_dim = self
+                .intermediate_size
+                .ok_or_else(|| WeightError::InvalidConfig("missing intermediate_size".into()))?;
             FeedForwardType::Dense { intermediate_dim }
         };
 

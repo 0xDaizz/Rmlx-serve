@@ -56,18 +56,10 @@ impl RotatingKVCache {
 
         let buf_size = max_size * head_dim;
         let keys = (0..num_layers)
-            .map(|_| {
-                (0..num_kv_heads)
-                    .map(|_| vec![0.0f32; buf_size])
-                    .collect()
-            })
+            .map(|_| (0..num_kv_heads).map(|_| vec![0.0f32; buf_size]).collect())
             .collect();
         let values = (0..num_layers)
-            .map(|_| {
-                (0..num_kv_heads)
-                    .map(|_| vec![0.0f32; buf_size])
-                    .collect()
-            })
+            .map(|_| (0..num_kv_heads).map(|_| vec![0.0f32; buf_size]).collect())
             .collect();
 
         Self {
@@ -159,17 +151,12 @@ impl RotatingKVCache {
     }
 
     /// Internal: reconstruct logical ordering from the circular buffer.
-    fn get_logical_order(
-        &self,
-        layer: usize,
-        storage: &[Vec<Vec<f32>>],
-    ) -> Vec<Vec<f32>> {
+    fn get_logical_order(&self, layer: usize, storage: &[Vec<Vec<f32>>]) -> Vec<Vec<f32>> {
         let hd = self.head_dim;
         let effective_len = self.seq_len();
         let mut result = Vec::with_capacity(self.num_kv_heads);
 
-        for head in 0..self.num_kv_heads {
-            let buf = &storage[layer][head];
+        for buf in storage[layer].iter().take(self.num_kv_heads) {
             let mut out = Vec::with_capacity(effective_len * hd);
 
             if self.written <= self.max_size {

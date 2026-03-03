@@ -120,9 +120,7 @@ impl LogitsProcessor for TopPProcessor {
         // Build (index, probability) pairs and sort by probability descending.
         let mut indexed: Vec<(usize, f32)> =
             probs.iter().enumerate().map(|(i, &p)| (i, p)).collect();
-        indexed.sort_unstable_by(|a, b| {
-            b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
-        });
+        indexed.sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
         // Cumulative sum; once cumsum > p, mask remaining tokens.
         let mut cumsum = 0.0f32;
@@ -176,10 +174,7 @@ impl LogitsProcessor for MinPProcessor {
 
         let probs = softmax(logits);
 
-        let max_prob = probs
-            .iter()
-            .cloned()
-            .fold(f32::NEG_INFINITY, f32::max);
+        let max_prob = probs.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
 
         let threshold = self.p * max_prob;
 
@@ -196,9 +191,7 @@ impl LogitsProcessor for MinPProcessor {
         // can identify the top-N tokens to protect.
         let mut indexed: Vec<(usize, f32)> =
             probs.iter().enumerate().map(|(i, &p)| (i, p)).collect();
-        indexed.sort_unstable_by(|a, b| {
-            b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
-        });
+        indexed.sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
         // Collect the indices of the top `min_tokens_to_keep` tokens that must
         // never be filtered out.
@@ -293,8 +286,7 @@ impl LogitsProcessor for FrequencyPresencePenaltyProcessor {
         for (&tid, &count) in &counts {
             let idx = tid as usize;
             if idx < logits.len() {
-                logits[idx] -= self.frequency_penalty * count as f32
-                    + self.presence_penalty;
+                logits[idx] -= self.frequency_penalty * count as f32 + self.presence_penalty;
             }
         }
     }
@@ -360,7 +352,9 @@ impl LogitsProcessor for XtcProcessor {
         let above_threshold: Vec<(usize, f32)> = probs
             .iter()
             .enumerate()
-            .filter(|(i, &p)| p >= self.threshold && !self.excluded_token_ids.contains(&(*i as u32)))
+            .filter(|(i, &p)| {
+                p >= self.threshold && !self.excluded_token_ids.contains(&(*i as u32))
+            })
             .map(|(i, &p)| (i, p))
             .collect();
 

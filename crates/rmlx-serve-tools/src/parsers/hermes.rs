@@ -9,13 +9,10 @@ use tracing::debug;
 
 use crate::parsers::utils::{generate_tool_call_id, strip_think_tags};
 use crate::tool_parser::ToolCallParser;
-use crate::types::{
-    DeltaToolCall, ParsedToolCall, StreamingParseResult, ToolCallParseResult,
-};
+use crate::types::{DeltaToolCall, ParsedToolCall, StreamingParseResult, ToolCallParseResult};
 
-static TOOL_CALL_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?s)<tool_call>\s*(.*?)\s*</tool_call>").unwrap()
-});
+static TOOL_CALL_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?s)<tool_call>\s*(.*?)\s*</tool_call>").unwrap());
 
 /// Parser for Hermes-style `<tool_call>` blocks.
 pub struct HermesToolParser {
@@ -192,7 +189,8 @@ mod tests {
     #[test]
     fn test_single_tool_call() {
         let parser = HermesToolParser::new();
-        let text = r#"<tool_call>{"name": "get_weather", "arguments": {"city": "London"}}</tool_call>"#;
+        let text =
+            r#"<tool_call>{"name": "get_weather", "arguments": {"city": "London"}}</tool_call>"#;
         let result = parser.parse(text);
         assert_eq!(result.tool_calls.len(), 1);
         assert_eq!(result.tool_calls[0].name, "get_weather");

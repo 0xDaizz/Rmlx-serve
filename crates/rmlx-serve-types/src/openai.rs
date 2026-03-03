@@ -25,21 +25,13 @@ pub enum ChatRole {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentPart {
     /// Plain text content.
-    Text {
-        text: String,
-    },
+    Text { text: String },
     /// An image specified by URL (or base64 data-URI).
-    ImageUrl {
-        image_url: ImageUrl,
-    },
+    ImageUrl { image_url: ImageUrl },
     /// A video specified by URL.
-    Video {
-        video: MediaUrl,
-    },
+    Video { video: MediaUrl },
     /// An audio clip specified by URL.
-    Audio {
-        audio: MediaUrl,
-    },
+    Audio { audio: MediaUrl },
 }
 
 /// URL reference for an image, with optional detail level.

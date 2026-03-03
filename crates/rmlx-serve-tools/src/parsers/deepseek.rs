@@ -16,9 +16,7 @@ use tracing::debug;
 
 use crate::parsers::utils::{generate_tool_call_id, strip_think_tags};
 use crate::tool_parser::ToolCallParser;
-use crate::types::{
-    DeltaToolCall, ParsedToolCall, StreamingParseResult, ToolCallParseResult,
-};
+use crate::types::{DeltaToolCall, ParsedToolCall, StreamingParseResult, ToolCallParseResult};
 
 // DeepSeek uses fullwidth characters in its special tokens.
 // ｜ = U+FF5C (fullwidth vertical line)
@@ -95,10 +93,7 @@ impl DeepSeekToolParser {
                 .strip_prefix("```json")
                 .or_else(|| rest.strip_prefix("```"))
                 .unwrap_or(rest);
-            let json_str = json_str
-                .strip_suffix("```")
-                .unwrap_or(json_str)
-                .trim();
+            let json_str = json_str.strip_suffix("```").unwrap_or(json_str).trim();
 
             let arguments = if json_str.is_empty() {
                 "{}".to_string()

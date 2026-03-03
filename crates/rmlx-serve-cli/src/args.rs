@@ -15,7 +15,6 @@ use rmlx_serve_types::config::{CacheConfig, EngineConfig, SchedulerConfig, Serve
 #[derive(clap::Args, Debug, Clone)]
 pub struct ServeArgs {
     // -- Server -----------------------------------------------------------
-
     /// Path or HuggingFace repo id for the model to serve.
     #[arg(short = 'm', long, required = true)]
     pub model: String,
@@ -54,7 +53,6 @@ pub struct ServeArgs {
     pub dtype: Option<String>,
 
     // -- Batching ----------------------------------------------------------
-
     /// Maximum number of sequences to prefill in a single batch.
     #[arg(long, default_value_t = 8)]
     pub prefill_batch_size: usize,
@@ -72,7 +70,6 @@ pub struct ServeArgs {
     pub chunked_prefill_tokens: usize,
 
     // -- Cache -------------------------------------------------------------
-
     /// Maximum number of prefix cache entries.
     #[arg(long, default_value_t = 100)]
     pub prefix_cache_size: usize,
@@ -122,7 +119,6 @@ pub struct ServeArgs {
     pub enable_prefix_caching: bool,
 
     // -- Generation --------------------------------------------------------
-
     /// Maximum number of tokens the server will generate per request.
     #[arg(long, default_value_t = 32768)]
     pub max_tokens: usize,
@@ -136,7 +132,6 @@ pub struct ServeArgs {
     pub default_top_p: Option<f64>,
 
     // -- Security ----------------------------------------------------------
-
     /// Rate limit: maximum requests per second per client. 0 = no limit.
     #[arg(long, default_value_t = 0)]
     pub rate_limit: usize,
@@ -146,7 +141,6 @@ pub struct ServeArgs {
     pub timeout: f64,
 
     // -- Speculative decoding ----------------------------------------------
-
     /// Speculative decoding method: "ngram", "draft", or "mtp".
     #[arg(long)]
     pub speculative_method: Option<String>,
@@ -176,7 +170,6 @@ pub struct ServeArgs {
     pub num_speculative_tokens: usize,
 
     // -- MTP ---------------------------------------------------------------
-
     /// Enable multi-token prediction.
     #[arg(long, default_value_t = false)]
     pub enable_mtp: bool,
@@ -190,7 +183,6 @@ pub struct ServeArgs {
     pub mtp_optimistic: bool,
 
     // -- Tool / Reasoning --------------------------------------------------
-
     /// Enable automatic tool-call detection in model output.
     #[arg(long, default_value_t = false)]
     pub enable_auto_tool_choice: bool,
@@ -208,7 +200,6 @@ pub struct ServeArgs {
     pub reasoning_parser: Option<String>,
 
     // -- Other -------------------------------------------------------------
-
     /// Path to an MCP configuration file (mcp.json).
     #[arg(long)]
     pub mcp_config: Option<String>,
@@ -222,7 +213,6 @@ pub struct ServeArgs {
     pub mllm: Option<String>,
 
     // -- Distributed -------------------------------------------------------
-
     /// Enable distributed inference across multiple devices/nodes.
     #[arg(long, default_value_t = false)]
     pub distributed: bool,

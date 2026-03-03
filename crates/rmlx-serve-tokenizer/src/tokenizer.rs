@@ -88,18 +88,22 @@ impl Tokenizer {
         // Try to load the config; if absent we just proceed with defaults.
         let config_path = dir.join("tokenizer_config.json");
         let config: TokenizerConfig = if config_path.exists() {
-            let raw = std::fs::read_to_string(&config_path).map_err(|e| {
-                TokenizerError::LoadFailed {
+            let raw =
+                std::fs::read_to_string(&config_path).map_err(|e| TokenizerError::LoadFailed {
                     path: config_path.clone(),
                     reason: e.to_string(),
-                }
-            })?;
-            serde_json::from_str(&raw).map_err(|e| TokenizerError::InvalidConfig(format!(
-                "failed to parse {}: {e}",
-                config_path.display()
-            )))?
+                })?;
+            serde_json::from_str(&raw).map_err(|e| {
+                TokenizerError::InvalidConfig(format!(
+                    "failed to parse {}: {e}",
+                    config_path.display()
+                ))
+            })?
         } else {
-            debug!("no tokenizer_config.json found at {}, using defaults", dir.display());
+            debug!(
+                "no tokenizer_config.json found at {}, using defaults",
+                dir.display()
+            );
             TokenizerConfig::default()
         };
 
@@ -202,10 +206,7 @@ impl Tokenizer {
     }
 
     /// Resolve a single optional special-token string into its token ID.
-    fn resolve_token_id(
-        inner: &tokenizers::Tokenizer,
-        tok: Option<&TokenOrString>,
-    ) -> Option<u32> {
+    fn resolve_token_id(inner: &tokenizers::Tokenizer, tok: Option<&TokenOrString>) -> Option<u32> {
         let tok = tok?;
         let s = tok.as_str();
         let id = inner.token_to_id(s);

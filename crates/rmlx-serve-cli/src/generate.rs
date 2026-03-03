@@ -37,7 +37,9 @@ pub struct GenerateArgs {
 }
 
 /// Run the `generate` subcommand.
-pub async fn run_generate(args: GenerateArgs) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+pub async fn run_generate(
+    args: GenerateArgs,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // -----------------------------------------------------------------------
     // 1. Build SamplingParams
     // -----------------------------------------------------------------------

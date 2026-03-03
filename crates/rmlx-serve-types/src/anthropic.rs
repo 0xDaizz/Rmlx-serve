@@ -40,9 +40,7 @@ pub enum StopReason {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AnthropicContent {
     /// Plain text content.
-    Text {
-        text: String,
-    },
+    Text { text: String },
 
     /// A tool-use request from the assistant.
     ToolUse {
@@ -302,9 +300,7 @@ pub struct AnthropicUsage {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AnthropicStreamEvent {
     /// The message has started.
-    MessageStart {
-        message: AnthropicMessagesResponse,
-    },
+    MessageStart { message: AnthropicMessagesResponse },
 
     /// A new content block has started.
     ContentBlockStart {
@@ -319,9 +315,7 @@ pub enum AnthropicStreamEvent {
     },
 
     /// A content block has finished.
-    ContentBlockStop {
-        index: usize,
-    },
+    ContentBlockStop { index: usize },
 
     /// Incremental update to the message (e.g. usage).
     MessageDelta {

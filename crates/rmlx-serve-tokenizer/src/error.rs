@@ -7,10 +7,7 @@ use std::path::PathBuf;
 pub enum TokenizerError {
     /// Failed to load a tokenizer or its configuration from disk.
     #[error("failed to load tokenizer from {path}: {reason}")]
-    LoadFailed {
-        path: PathBuf,
-        reason: String,
-    },
+    LoadFailed { path: PathBuf, reason: String },
 
     /// Encoding text into token IDs failed.
     #[error("encoding failed: {0}")]

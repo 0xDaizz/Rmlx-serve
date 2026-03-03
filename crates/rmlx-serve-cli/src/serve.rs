@@ -41,10 +41,7 @@ pub async fn run_serve(args: ServeArgs) -> Result<(), Box<dyn std::error::Error 
     info!("spec_tokens    : {}", args.num_speculative_tokens);
     info!("thinking       : {}", args.enable_thinking);
     info!("auto_tool_call : {}", args.enable_auto_tool_choice);
-    info!(
-        "listen         : http://{}:{}",
-        args.host, args.port
-    );
+    info!("listen         : http://{}:{}", args.host, args.port);
     if args.api_key.is_some() {
         info!("auth           : bearer-token enabled");
     }
@@ -62,7 +59,10 @@ pub async fn run_serve(args: ServeArgs) -> Result<(), Box<dyn std::error::Error 
     };
 
     info!("engine initialised, model loaded");
-    info!("starting HTTP server on {}:{} ...", server_config.host, server_config.port);
+    info!(
+        "starting HTTP server on {}:{} ...",
+        server_config.host, server_config.port
+    );
 
     rmlx_serve_api::serve(engine, server_config).await?;
 

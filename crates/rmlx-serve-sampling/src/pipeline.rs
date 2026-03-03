@@ -115,8 +115,7 @@ pub fn make_logits_processors(params: &SamplingParams) -> Vec<Box<dyn LogitsProc
     }
 
     // Frequency and presence penalties.
-    if params.frequency_penalty.abs() > f32::EPSILON
-        || params.presence_penalty.abs() > f32::EPSILON
+    if params.frequency_penalty.abs() > f32::EPSILON || params.presence_penalty.abs() > f32::EPSILON
     {
         processors.push(Box::new(FrequencyPresencePenaltyProcessor {
             frequency_penalty: params.frequency_penalty,

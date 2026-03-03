@@ -11,9 +11,7 @@ use crate::parsers::utils::{
     extract_json_objects, generate_tool_call_id, parse_json_tool_call, strip_think_tags,
 };
 use crate::tool_parser::ToolCallParser;
-use crate::types::{
-    DeltaToolCall, ParsedToolCall, StreamingParseResult, ToolCallParseResult,
-};
+use crate::types::{DeltaToolCall, ParsedToolCall, StreamingParseResult, ToolCallParseResult};
 
 // ---------------------------------------------------------------------------
 // Shared streaming helper
@@ -93,9 +91,8 @@ impl GenericStreamState {
 // GLM47ToolParser
 // ===========================================================================
 
-static GLM_OBSERVATION_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?s)(.*?)<\|observation\|>").unwrap()
-});
+static GLM_OBSERVATION_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?s)(.*?)<\|observation\|>").unwrap());
 
 /// Parser for GLM-4-7B style tool calls.
 ///
@@ -176,9 +173,8 @@ impl ToolCallParser for GLM47ToolParser {
 // GraniteToolParser
 // ===========================================================================
 
-static GRANITE_TOOL_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?s)<tool_call>\s*(.*?)\s*</tool_call>").unwrap()
-});
+static GRANITE_TOOL_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?s)<tool_call>\s*(.*?)\s*</tool_call>").unwrap());
 
 /// Parser for Granite-style tool calls.
 ///
@@ -366,9 +362,8 @@ impl ToolCallParser for XLamToolParser {
 // KimiToolParser
 // ===========================================================================
 
-static KIMI_TOOL_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?s)<tool_call>\s*(.*?)\s*</tool_call>").unwrap()
-});
+static KIMI_TOOL_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?s)<tool_call>\s*(.*?)\s*</tool_call>").unwrap());
 
 /// Parser for Kimi-style tool calls.
 ///
@@ -444,9 +439,8 @@ impl ToolCallParser for KimiToolParser {
 // NemotronToolParser
 // ===========================================================================
 
-static NEMOTRON_TOOL_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?s)<toolcall>\s*(.*?)\s*</toolcall>").unwrap()
-});
+static NEMOTRON_TOOL_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?s)<toolcall>\s*(.*?)\s*</toolcall>").unwrap());
 
 /// Parser for Nemotron-style tool calls.
 ///
@@ -640,9 +634,8 @@ impl ToolCallParser for FunctionaryToolParser {
 // HarmonyToolParser
 // ===========================================================================
 
-static HARMONY_TOOL_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?s)<tool_call>\s*(.*?)\s*</tool_call>").unwrap()
-});
+static HARMONY_TOOL_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?s)<tool_call>\s*(.*?)\s*</tool_call>").unwrap());
 
 /// Generic harmony-style tool call parser.
 ///
@@ -725,8 +718,7 @@ mod tests {
     #[test]
     fn test_glm47_observation() {
         let parser = GLM47ToolParser::new();
-        let text =
-            r#"{"name": "get_weather", "arguments": {"city": "London"}}<|observation|>"#;
+        let text = r#"{"name": "get_weather", "arguments": {"city": "London"}}<|observation|>"#;
         let result = parser.parse(text);
         assert_eq!(result.tool_calls.len(), 1);
         assert_eq!(result.tool_calls[0].name, "get_weather");

@@ -90,11 +90,7 @@ impl MtpProposer {
     /// # Arguments
     /// * `_context` - Token context (not used directly; MTP uses hidden states).
     /// * `hidden_states` - Optional external hidden states override.
-    pub fn propose_from_hidden(
-        &self,
-        _context: &[u32],
-        hidden_states: Option<&[f32]>,
-    ) -> Vec<u32> {
+    pub fn propose_from_hidden(&self, _context: &[u32], hidden_states: Option<&[f32]>) -> Vec<u32> {
         let _states = match hidden_states.or(self.hidden_states.as_deref()) {
             Some(s) => s,
             None => return Vec::new(),

@@ -45,7 +45,10 @@ pub fn detect_quantization(config: &ModelConfig) -> QuantMethod {
                 QuantMethod::BitsAndBytes
             }
             other => {
-                warn!(method = other, "unrecognized quantization method, treating as unquantized");
+                warn!(
+                    method = other,
+                    "unrecognized quantization method, treating as unquantized"
+                );
                 QuantMethod::None
             }
         },
@@ -215,7 +218,10 @@ pub fn apply_quantization(
         };
 
         if unpacked.is_empty() {
-            warn!(name = qweight_name.as_str(), "unpacking produced zero elements");
+            warn!(
+                name = qweight_name.as_str(),
+                "unpacking produced zero elements"
+            );
             continue;
         }
 
@@ -458,8 +464,8 @@ mod tests {
         let packed = packed_val.to_le_bytes().to_vec();
         let result = unpack_awq_weights(&packed, 4, 128);
         assert_eq!(result.len(), 8); // 32/4 = 8 values per u32
-        // Values extracted in interleaved order: shifts [0,16,4,20,8,24,12,28]
-        // Unsigned (no sign centering)
+                                     // Values extracted in interleaved order: shifts [0,16,4,20,8,24,12,28]
+                                     // Unsigned (no sign centering)
         assert_eq!(result[0], 3.0); // shift 0
         assert_eq!(result[1], 5.0); // shift 16
         assert_eq!(result[2], 7.0); // shift 4

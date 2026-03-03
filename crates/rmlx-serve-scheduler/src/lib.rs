@@ -37,4 +37,7 @@ pub use batch::{Batch, SequenceId, SequenceState};
 pub use batch_generator::{BatchGenerator, BatchGeneratorConfig, BatchResponse, BatchStats};
 pub use error::SchedulerError;
 pub use policy::SchedulingPolicy;
-pub use scheduler::{ScheduledResponse, Scheduler, SchedulerOutput, WaitingRequest};
+pub use scheduler::{CacheType, ScheduledResponse, Scheduler, SchedulerOutput, WaitingRequest};
+
+// Re-export speculative decoding types used by the scheduler's public API.
+pub use rmlx_serve_speculative::{SpecDecodeConfig, SpecDecodeRuntime, SpecMethod};

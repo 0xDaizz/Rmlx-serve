@@ -74,7 +74,7 @@ impl ChatTemplate {
     /// - `bos_token`, `eos_token` -- set to empty strings unless overridden
     ///   by the caller via [`apply_with_tokens`].
     pub fn apply(&self, messages: &[TemplateMessage]) -> Result<String> {
-        self.apply_with_tokens(messages, "", "")
+        self.apply_with_options(messages, "", "", None::<&[serde_json::Value]>, None)
     }
 
     /// Same as [`apply`] but allows injecting `bos_token` / `eos_token`
@@ -85,10 +85,38 @@ impl ChatTemplate {
         bos_token: &str,
         eos_token: &str,
     ) -> Result<String> {
+        self.apply_with_options(
+            messages,
+            bos_token,
+            eos_token,
+            None::<&[serde_json::Value]>,
+            None,
+        )
+    }
+
+    /// Full-featured rendering that accepts all template variables.
+    ///
+    /// Additional variables beyond [`apply_with_tokens`]:
+    /// - `tools` -- an optional list of tool/function definitions for models
+    ///   that support function calling in their chat template.
+    /// - `enable_thinking` -- an optional boolean for models (e.g. DeepSeek R1)
+    ///   that have a thinking/reasoning mode controlled via the template.
+    pub fn apply_with_options<T: Serialize>(
+        &self,
+        messages: &[TemplateMessage],
+        bos_token: &str,
+        eos_token: &str,
+        tools: Option<&[T]>,
+        enable_thinking: Option<bool>,
+    ) -> Result<String> {
         let mut env = Environment::new();
 
         // Register a `raise_exception` function that many HF templates use.
         env.add_function("raise_exception", raise_exception);
+
+        // Register the `tojson` filter so templates can serialise values to
+        // JSON inline (e.g. `{{ tools | tojson }}`).
+        env.add_filter("tojson", tojson_filter);
 
         env.add_template("chat", &self.template_source)
             .map_err(|e| {
@@ -104,6 +132,8 @@ impl ChatTemplate {
             add_generation_prompt => true,
             bos_token => bos_token,
             eos_token => eos_token,
+            tools => tools,
+            enable_thinking => enable_thinking,
         };
 
         tmpl.render(ctx)
@@ -190,4 +220,18 @@ fn raise_exception(msg: String) -> std::result::Result<String, minijinja::Error>
         minijinja::ErrorKind::InvalidOperation,
         format!("template raised exception: {msg}"),
     ))
+}
+
+/// A `tojson` filter that serialises any value to a JSON string.
+///
+/// Many HuggingFace chat templates use `{{ value | tojson }}` (borrowed from
+/// Jinja2) to embed structured data in the rendered prompt.
+fn tojson_filter(value: minijinja::Value) -> std::result::Result<String, minijinja::Error> {
+    // minijinja Values can be serialised via serde.
+    serde_json::to_string(&value).map_err(|e| {
+        minijinja::Error::new(
+            minijinja::ErrorKind::InvalidOperation,
+            format!("tojson filter failed: {e}"),
+        )
+    })
 }

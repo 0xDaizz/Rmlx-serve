@@ -7,6 +7,9 @@ use rmlx_serve_engine::Engine;
 use rmlx_serve_tools::{ReasoningParserRegistry, ToolParserRegistry};
 use rmlx_serve_types::config::ServerConfig;
 
+use crate::mcp::manager::McpClientManager;
+use crate::middleware::RateLimiter;
+
 /// Shared application state passed to every request handler via Axum's
 /// `State` extractor.
 pub struct AppState {
@@ -22,24 +25,66 @@ pub struct AppState {
     /// Registry of reasoning/thinking parsers (think, deepseek_r1, ...).
     pub reasoning_parser_registry: ReasoningParserRegistry,
 
+    /// Name of the active tool-call parser (e.g. `"hermes"`, `"llama"`).
+    /// `None` means tool-call detection is disabled.
+    pub tool_parser_name: Option<String>,
+
+    /// Name of the active reasoning parser (e.g. `"think"`, `"deepseek_r1"`).
+    /// `None` means reasoning extraction is disabled.
+    pub reasoning_parser_name: Option<String>,
+
     /// Monotonically increasing request counter (for metrics / request IDs).
     pub request_count: AtomicU64,
 
     /// The instant the server was started (for uptime calculation).
     pub start_time: std::time::Instant,
+
+    /// Per-IP sliding-window rate limiter.
+    pub rate_limiter: RateLimiter,
+
+    /// MCP client manager for connected tool servers.
+    /// `None` when MCP is not configured.
+    pub mcp_manager: Option<Arc<McpClientManager>>,
 }
 
 impl AppState {
     /// Create a new `AppState` wrapped in an `Arc`, ready for injection into
     /// the Axum router.
     pub fn new(engine: Arc<dyn Engine>, config: ServerConfig) -> Arc<Self> {
+        let rate_limiter = RateLimiter::new(config.rate_limit);
         Arc::new(Self {
             engine,
             config,
             tool_parser_registry: ToolParserRegistry::new(),
             reasoning_parser_registry: ReasoningParserRegistry::new(),
+            tool_parser_name: None,
+            reasoning_parser_name: None,
             request_count: AtomicU64::new(0),
             start_time: std::time::Instant::now(),
+            rate_limiter,
+            mcp_manager: None,
+        })
+    }
+
+    /// Create a new `AppState` with explicit tool/reasoning parser names.
+    pub fn with_parsers(
+        engine: Arc<dyn Engine>,
+        config: ServerConfig,
+        tool_parser_name: Option<String>,
+        reasoning_parser_name: Option<String>,
+    ) -> Arc<Self> {
+        let rate_limiter = RateLimiter::new(config.rate_limit);
+        Arc::new(Self {
+            engine,
+            config,
+            tool_parser_registry: ToolParserRegistry::new(),
+            reasoning_parser_registry: ReasoningParserRegistry::new(),
+            tool_parser_name,
+            reasoning_parser_name,
+            request_count: AtomicU64::new(0),
+            start_time: std::time::Instant::now(),
+            rate_limiter,
+            mcp_manager: None,
         })
     }
 }

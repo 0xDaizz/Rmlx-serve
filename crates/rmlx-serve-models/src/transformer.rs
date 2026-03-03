@@ -9,7 +9,12 @@ use tracing::{debug, info};
 use crate::error::{ModelError, Result};
 use crate::mask;
 use crate::rope;
+use crate::rope::RopeScalingMethod;
 use crate::traits::LlmModel;
+
+/// Default prefill chunk size in tokens. Sequences longer than this are
+/// processed in chunks to limit peak memory usage.
+const DEFAULT_PREFILL_CHUNK_SIZE: usize = 512;
 
 /// A fully-initialized transformer LLM ready for inference.
 ///
@@ -32,16 +37,34 @@ pub struct TransformerLlm {
     sin_freqs: Array,
     /// GPU device reference for buffer allocation.
     device: GpuDevice,
+    /// Maximum number of tokens to process in a single prefill chunk.
+    /// Sequences longer than this are split into chunks to limit peak
+    /// memory usage. Defaults to [`DEFAULT_PREFILL_CHUNK_SIZE`].
+    prefill_chunk_size: usize,
 }
 
 impl TransformerLlm {
     /// Create a new `TransformerLlm` from a loaded model, config, and device.
     ///
-    /// Precomputes RoPE frequency tables and validates the configuration.
+    /// Precomputes RoPE frequency tables (with no scaling) and validates the
+    /// configuration. See [`Self::with_rope_scaling`] for RoPE scaling support.
     pub fn new(
         model: TransformerModel,
         config: TransformerConfig,
         device: GpuDevice,
+    ) -> Result<Self> {
+        Self::with_rope_scaling(model, config, device, RopeScalingMethod::None)
+    }
+
+    /// Create a new `TransformerLlm` with explicit RoPE scaling.
+    ///
+    /// Precomputes RoPE frequency tables using the given scaling method and
+    /// validates the configuration.
+    pub fn with_rope_scaling(
+        model: TransformerModel,
+        config: TransformerConfig,
+        device: GpuDevice,
+        rope_scaling: RopeScalingMethod,
     ) -> Result<Self> {
         config.validate().map_err(ModelError::KernelError)?;
 
@@ -54,10 +77,12 @@ impl TransformerLlm {
             max_seq_len = config.max_seq_len,
             vocab_size = config.vocab_size,
             rope_theta = config.rope_theta,
+            rope_scaling = ?rope_scaling,
             "initializing TransformerLlm"
         );
 
-        let (cos_freqs, sin_freqs) = Self::precompute_rope_frequencies(&config, &device);
+        let (cos_freqs, sin_freqs) =
+            Self::precompute_rope_frequencies(&config, &rope_scaling, &device);
 
         debug!(
             cos_shape = ?cos_freqs.shape(),
@@ -71,23 +96,32 @@ impl TransformerLlm {
             cos_freqs,
             sin_freqs,
             device,
+            prefill_chunk_size: DEFAULT_PREFILL_CHUNK_SIZE,
         })
+    }
+
+    /// Set the maximum prefill chunk size (in tokens).
+    ///
+    /// When the input sequence to `forward()` exceeds this size, it will be
+    /// processed in chunks to limit peak memory consumption.
+    pub fn set_prefill_chunk_size(&mut self, chunk_size: usize) {
+        self.prefill_chunk_size = chunk_size.max(1);
     }
 
     /// Precompute RoPE frequency tables for all positions up to `max_seq_len`.
     ///
-    /// Uses the formula:
-    ///   theta_i = rope_theta^(-2i / head_dim)  for i in 0..head_dim/2
-    ///   cos_freqs[pos][i] = cos(pos * theta_i)
-    ///   sin_freqs[pos][i] = sin(pos * theta_i)
+    /// Supports standard RoPE as well as linear, NTK-aware, and YaRN scaling
+    /// methods via the `scaling` parameter.
     fn precompute_rope_frequencies(
         config: &TransformerConfig,
+        scaling: &RopeScalingMethod,
         device: &GpuDevice,
     ) -> (Array, Array) {
-        rope::compute_rope_frequencies(
+        rope::compute_rope_frequencies_with_scaling(
             config.head_dim,
             config.max_seq_len,
             config.rope_theta,
+            scaling,
             device.raw(),
         )
     }
@@ -110,7 +144,7 @@ impl LlmModel for TransformerLlm {
     fn forward(
         &self,
         token_ids: &[u32],
-        cache: Option<&mut Vec<LayerKvCache>>,
+        mut cache: Option<&mut Vec<LayerKvCache>>,
         registry: &KernelRegistry,
         queue: &metal::CommandQueue,
     ) -> std::result::Result<Array, ModelError> {
@@ -138,6 +172,84 @@ impl LlmModel for TransformerLlm {
                 self.config.max_seq_len
             )));
         }
+
+        // ── Chunked prefill ──────────────────────────────────────────
+        // If the sequence is longer than `prefill_chunk_size` and we have
+        // a KV cache, split into chunks. Each chunk runs a forward pass
+        // and updates the cache so the next chunk sees the previously
+        // computed K/V entries. This limits peak memory proportional to
+        // chunk_size rather than full seq_len.
+        if seq_len > self.prefill_chunk_size {
+            if let Some(cache) = cache.as_mut() {
+                let mut last_logits: Option<Array> = None;
+
+                let mut chunk_start = 0;
+                while chunk_start < seq_len {
+                    let chunk_end = (chunk_start + self.prefill_chunk_size).min(seq_len);
+                    let chunk_tokens = &token_ids[chunk_start..chunk_end];
+                    let chunk_len = chunk_tokens.len();
+
+                    // Current offset includes both the original offset and
+                    // tokens from previous chunks in this call.
+                    let chunk_offset = offset + chunk_start;
+
+                    // Slice RoPE frequencies for this chunk
+                    let cos_slice = self
+                        .cos_freqs
+                        .slice(0, chunk_offset, chunk_offset + chunk_len)
+                        .map_err(ModelError::KernelError)?;
+                    let sin_slice = self
+                        .sin_freqs
+                        .slice(0, chunk_offset, chunk_offset + chunk_len)
+                        .map_err(ModelError::KernelError)?;
+
+                    // Build causal mask for this chunk
+                    let causal_mask =
+                        Self::create_causal_mask(chunk_len, chunk_offset, self.device.raw());
+
+                    // Run forward pass for this chunk (updates cache in place)
+                    let logits = self.model.forward(
+                        chunk_tokens,
+                        Some(&cos_slice),
+                        Some(&sin_slice),
+                        Some(&causal_mask),
+                        Some(cache),
+                        registry,
+                        queue,
+                    )?;
+
+                    debug!(
+                        chunk_start = chunk_start,
+                        chunk_end = chunk_end,
+                        chunk_offset = chunk_offset,
+                        "processed prefill chunk"
+                    );
+
+                    last_logits = Some(logits);
+                    chunk_start = chunk_end;
+                }
+
+                // Extract last token logits from the final chunk's output
+                let logits = last_logits.expect("at least one chunk must be processed");
+                let final_chunk_len =
+                    seq_len - (seq_len / self.prefill_chunk_size) * self.prefill_chunk_size;
+                let final_chunk_len = if final_chunk_len == 0 {
+                    self.prefill_chunk_size
+                } else {
+                    final_chunk_len
+                };
+                if final_chunk_len > 1 {
+                    let last = logits
+                        .slice(0, final_chunk_len - 1, final_chunk_len)
+                        .map_err(ModelError::KernelError)?;
+                    return Ok(last);
+                } else {
+                    return Ok(logits);
+                }
+            }
+        }
+
+        // ── Standard (non-chunked) forward pass ──────────────────────
 
         // 2. Slice precomputed RoPE frequencies for [offset..offset+seq_len]
         let cos_slice = self

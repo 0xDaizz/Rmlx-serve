@@ -1,14 +1,24 @@
 //! DeepSeek-style tool call parser.
 //!
-//! Detects `<｜tool▁call▁begin｜>` ... `<｜tool▁call▁end｜>` blocks
-//! containing function name and arguments.
+//! Supports two formats:
 //!
-//! Format:
+//! ## Format 1: ASCII special tokens (DeepSeek-V3 / R1)
+//! ```text
+//! <|tool_calls_begin|><|tool_call_begin|>function<|tool_sep|>name
+//! {"arg": "val"}<|tool_call_end|><|tool_calls_end|>
+//! ```
+//!
+//! Multiple calls separated by `<|tool_call_end|><|tool_call_begin|>`.
+//!
+//! ## Format 2: Fullwidth-character special tokens (legacy)
 //! ```text
 //! <｜tool▁call▁begin｜>function_name
 //! {"arg1": "val1"}
 //! <｜tool▁call▁end｜>
 //! ```
+//!
+//! ｜ = U+FF5C (fullwidth vertical line)
+//! ▁ = U+2581 (lower one eighth block)
 
 use regex::Regex;
 use std::sync::LazyLock;
@@ -18,17 +28,38 @@ use crate::parsers::utils::{generate_tool_call_id, strip_think_tags};
 use crate::tool_parser::ToolCallParser;
 use crate::types::{DeltaToolCall, ParsedToolCall, StreamingParseResult, ToolCallParseResult};
 
-// DeepSeek uses fullwidth characters in its special tokens.
-// ｜ = U+FF5C (fullwidth vertical line)
-// ▁ = U+2581 (lower one eighth block, used as word separator)
-static DEEPSEEK_BLOCK_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?s)<\u{ff5c}tool\u{2581}call\u{2581}begin\u{ff5c}>\s*(.*?)\s*<\u{ff5c}tool\u{2581}call\u{2581}end\u{ff5c}>").unwrap()
+// ---------------------------------------------------------------------------
+// Format 1: ASCII tokens  <|tool_call_begin|>function<|tool_sep|>name\n{...}<|tool_call_end|>
+// ---------------------------------------------------------------------------
+const TOOL_CALLS_BEGIN: &str = "<|tool_calls_begin|>";
+const TOOL_CALLS_END: &str = "<|tool_calls_end|>";
+const TOOL_CALL_BEGIN: &str = "<|tool_call_begin|>";
+const TOOL_CALL_END: &str = "<|tool_call_end|>";
+const TOOL_SEP: &str = "<|tool_sep|>";
+
+/// Regex for ASCII-token individual call blocks:
+/// `<|tool_call_begin|>function<|tool_sep|>name\n{...}<|tool_call_end|>`
+static ASCII_CALL_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?s)<\|tool_call_begin\|>\s*(?:function\s*)?<\|tool_sep\|>\s*(.*?)\s*<\|tool_call_end\|>",
+    )
+    .unwrap()
 });
 
-/// Marker for the beginning of a DeepSeek tool call block.
-const TOOL_CALL_BEGIN: &str = "<\u{ff5c}tool\u{2581}call\u{2581}begin\u{ff5c}>";
-/// Marker for the end of a DeepSeek tool call block.
-const TOOL_CALL_END: &str = "<\u{ff5c}tool\u{2581}call\u{2581}end\u{ff5c}>";
+// ---------------------------------------------------------------------------
+// Format 2: Fullwidth-character tokens (legacy DeepSeek)
+// ---------------------------------------------------------------------------
+/// Marker for the beginning of a legacy DeepSeek tool call block.
+const LEGACY_TOOL_CALL_BEGIN: &str = "<\u{ff5c}tool\u{2581}call\u{2581}begin\u{ff5c}>";
+/// Marker for the end of a legacy DeepSeek tool call block.
+const LEGACY_TOOL_CALL_END: &str = "<\u{ff5c}tool\u{2581}call\u{2581}end\u{ff5c}>";
+
+static LEGACY_BLOCK_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?s)<\u{ff5c}tool\u{2581}call\u{2581}begin\u{ff5c}>\s*(.*?)\s*<\u{ff5c}tool\u{2581}call\u{2581}end\u{ff5c}>"
+    )
+    .unwrap()
+});
 
 /// Parser for DeepSeek-style tool calls.
 pub struct DeepSeekToolParser {
@@ -46,15 +77,14 @@ impl DeepSeekToolParser {
         }
     }
 
+    /// Parse a block that has already been extracted from between begin/end markers.
+    ///
+    /// For the ASCII format, the block content is everything between `<|tool_sep|>` and
+    /// `<|tool_call_end|>`, which looks like:  `name\n{"arg": "val"}`
+    ///
+    /// For the legacy format, the block content is:  `function_name\n{"arg": "val"}`
     fn parse_block(block_content: &str) -> Option<ParsedToolCall> {
         let trimmed = block_content.trim();
-
-        // The block format is:
-        //   function_name\n{"arg": "value"}
-        // or sometimes:
-        //   function_name\n```json\n{"arg": "value"}\n```
-        // or just:
-        //   {"name": "fn", "arguments": {...}}
 
         // First, try parsing the entire block as a JSON tool call object
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) {
@@ -121,6 +151,82 @@ impl DeepSeekToolParser {
 
         None
     }
+
+    /// Extract tool calls from the ASCII token format.
+    fn extract_ascii_calls(text: &str) -> Vec<ParsedToolCall> {
+        let mut calls = Vec::new();
+        for cap in ASCII_CALL_RE.captures_iter(text) {
+            let block = cap.get(1).unwrap().as_str();
+            if let Some(tc) = Self::parse_block(block) {
+                calls.push(tc);
+            }
+        }
+        calls
+    }
+
+    /// Extract tool calls from the legacy fullwidth token format.
+    fn extract_legacy_calls(text: &str) -> Vec<ParsedToolCall> {
+        let mut calls = Vec::new();
+        for cap in LEGACY_BLOCK_RE.captures_iter(text) {
+            let block = cap.get(1).unwrap().as_str();
+            if let Some(tc) = Self::parse_block(block) {
+                calls.push(tc);
+            }
+        }
+        calls
+    }
+
+    /// Detect whether the text uses ASCII-format or legacy-format markers.
+    fn has_ascii_markers(text: &str) -> bool {
+        text.contains(TOOL_CALL_BEGIN) || text.contains(TOOL_CALLS_BEGIN)
+    }
+
+    fn has_legacy_markers(text: &str) -> bool {
+        text.contains(LEGACY_TOOL_CALL_BEGIN)
+    }
+
+    /// Extract content (non-tool-call text) from the text.
+    fn extract_content(text: &str) -> Option<String> {
+        let mut content = text.to_string();
+
+        // Remove ASCII-format wrapper
+        if let Some(begin_pos) = content.find(TOOL_CALLS_BEGIN) {
+            if let Some(end_pos) = content.find(TOOL_CALLS_END) {
+                let before = content[..begin_pos].trim();
+                let after = content[end_pos + TOOL_CALLS_END.len()..].trim();
+                let mut parts = Vec::new();
+                if !before.is_empty() {
+                    parts.push(before.to_string());
+                }
+                if !after.is_empty() {
+                    parts.push(after.to_string());
+                }
+                return if parts.is_empty() {
+                    None
+                } else {
+                    Some(parts.join("\n"))
+                };
+            }
+        }
+
+        // Remove individual ASCII call blocks
+        content = ASCII_CALL_RE.replace_all(&content, "").to_string();
+        // Remove legacy blocks
+        content = LEGACY_BLOCK_RE.replace_all(&content, "").to_string();
+        // Remove remaining markers
+        content = content.replace(TOOL_CALLS_BEGIN, "");
+        content = content.replace(TOOL_CALLS_END, "");
+        content = content.replace(TOOL_CALL_BEGIN, "");
+        content = content.replace(TOOL_CALL_END, "");
+        content = content.replace(TOOL_SEP, "");
+
+        let trimmed = content.trim().to_string();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
+    }
 }
 
 impl Default for DeepSeekToolParser {
@@ -133,38 +239,34 @@ impl ToolCallParser for DeepSeekToolParser {
     fn parse(&self, text: &str) -> ToolCallParseResult {
         let cleaned = strip_think_tags(text);
 
-        let mut tool_calls = Vec::new();
-        let mut content_parts = Vec::new();
-        let mut last_end = 0;
-
-        for cap in DEEPSEEK_BLOCK_RE.captures_iter(&cleaned) {
-            let full_match = cap.get(0).unwrap();
-            let block_content = cap.get(1).unwrap().as_str();
-
-            // Collect text before this block
-            let before = &cleaned[last_end..full_match.start()];
-            let trimmed = before.trim();
-            if !trimmed.is_empty() {
-                content_parts.push(trimmed.to_string());
+        let tool_calls = if Self::has_ascii_markers(&cleaned) {
+            let calls = Self::extract_ascii_calls(&cleaned);
+            if !calls.is_empty() {
+                calls
+            } else if Self::has_legacy_markers(&cleaned) {
+                Self::extract_legacy_calls(&cleaned)
+            } else {
+                vec![]
             }
-            last_end = full_match.end();
-
-            if let Some(tc) = Self::parse_block(block_content) {
-                debug!(name = %tc.name, "parsed DeepSeek tool call");
-                tool_calls.push(tc);
-            }
-        }
-
-        // Trailing text
-        let trailing = cleaned[last_end..].trim();
-        if !trailing.is_empty() {
-            content_parts.push(trailing.to_string());
-        }
-
-        let content = if content_parts.is_empty() {
-            None
+        } else if Self::has_legacy_markers(&cleaned) {
+            Self::extract_legacy_calls(&cleaned)
         } else {
-            Some(content_parts.join("\n"))
+            vec![]
+        };
+
+        if !tool_calls.is_empty() {
+            debug!(count = tool_calls.len(), "parsed DeepSeek tool calls");
+        }
+
+        let content = if tool_calls.is_empty() {
+            let trimmed = cleaned.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        } else {
+            Self::extract_content(&cleaned)
         };
 
         ToolCallParseResult {
@@ -177,7 +279,10 @@ impl ToolCallParser for DeepSeekToolParser {
         self.buffer.push_str(delta);
         let text = strip_think_tags(curr);
 
-        if text.contains(TOOL_CALL_BEGIN) {
+        if text.contains(TOOL_CALL_BEGIN)
+            || text.contains(TOOL_CALLS_BEGIN)
+            || text.contains(LEGACY_TOOL_CALL_BEGIN)
+        {
             self.in_tool_call = true;
         }
 
@@ -190,13 +295,11 @@ impl ToolCallParser for DeepSeekToolParser {
         }
 
         // Parse completed blocks
-        let mut all_calls = Vec::new();
-        for cap in DEEPSEEK_BLOCK_RE.captures_iter(&text) {
-            let block_content = cap.get(1).unwrap().as_str();
-            if let Some(tc) = Self::parse_block(block_content) {
-                all_calls.push(tc);
-            }
-        }
+        let all_calls = if Self::has_ascii_markers(&text) {
+            Self::extract_ascii_calls(&text)
+        } else {
+            Self::extract_legacy_calls(&text)
+        };
 
         let mut new_deltas = Vec::new();
         for (i, tc) in all_calls.iter().enumerate() {
@@ -212,8 +315,16 @@ impl ToolCallParser for DeepSeekToolParser {
         }
 
         // Finished when the last open block is closed
-        let finished = if let Some(last_begin) = text.rfind(TOOL_CALL_BEGIN) {
-            text[last_begin..].contains(TOOL_CALL_END)
+        let finished = if Self::has_ascii_markers(&text) {
+            // Finished when we see tool_calls_end or the last tool_call_begin has a matching end
+            text.contains(TOOL_CALLS_END)
+                || (if let Some(last_begin) = text.rfind(TOOL_CALL_BEGIN) {
+                    text[last_begin..].contains(TOOL_CALL_END)
+                } else {
+                    false
+                })
+        } else if let Some(last_begin) = text.rfind(LEGACY_TOOL_CALL_BEGIN) {
+            text[last_begin..].contains(LEGACY_TOOL_CALL_END)
         } else {
             false
         };
@@ -230,18 +341,26 @@ impl ToolCallParser for DeepSeekToolParser {
         self.current_tool_count = 0;
         self.in_tool_call = false;
     }
+
+    fn supports_native_tool_format(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    // -----------------------------------------------------------------------
+    // ASCII format tests (DeepSeek-V3 / R1)
+    // -----------------------------------------------------------------------
+
     #[test]
-    fn test_deepseek_function_format() {
+    fn test_ascii_format_single_call() {
         let parser = DeepSeekToolParser::new();
         let text = format!(
-            "{}get_weather\n{{\"city\": \"London\"}}{}",
-            TOOL_CALL_BEGIN, TOOL_CALL_END
+            "{}{}function{}get_weather\n{{\"city\": \"London\"}}{}{}",
+            TOOL_CALLS_BEGIN, TOOL_CALL_BEGIN, TOOL_SEP, TOOL_CALL_END, TOOL_CALLS_END
         );
         let result = parser.parse(&text);
         assert_eq!(result.tool_calls.len(), 1);
@@ -250,23 +369,14 @@ mod tests {
     }
 
     #[test]
-    fn test_deepseek_json_format() {
+    fn test_ascii_format_multiple_calls() {
         let parser = DeepSeekToolParser::new();
         let text = format!(
-            "{}{{\"name\": \"search\", \"arguments\": {{\"q\": \"rust\"}}}}{}",
-            TOOL_CALL_BEGIN, TOOL_CALL_END
-        );
-        let result = parser.parse(&text);
-        assert_eq!(result.tool_calls.len(), 1);
-        assert_eq!(result.tool_calls[0].name, "search");
-    }
-
-    #[test]
-    fn test_deepseek_multiple_calls() {
-        let parser = DeepSeekToolParser::new();
-        let text = format!(
-            "{}get_weather\n{{\"city\": \"London\"}}{}{}get_time\n{{\"tz\": \"UTC\"}}{}",
-            TOOL_CALL_BEGIN, TOOL_CALL_END, TOOL_CALL_BEGIN, TOOL_CALL_END
+            "{}{}function{}get_weather\n{{\"city\": \"London\"}}{}{}function{}get_time\n{{\"tz\": \"UTC\"}}{}{}",
+            TOOL_CALLS_BEGIN,
+            TOOL_CALL_BEGIN, TOOL_SEP, TOOL_CALL_END,
+            TOOL_CALL_BEGIN, TOOL_SEP, TOOL_CALL_END,
+            TOOL_CALLS_END
         );
         let result = parser.parse(&text);
         assert_eq!(result.tool_calls.len(), 2);
@@ -275,11 +385,69 @@ mod tests {
     }
 
     #[test]
-    fn test_deepseek_with_content() {
+    fn test_ascii_format_with_content() {
+        let parser = DeepSeekToolParser::new();
+        let text = format!(
+            "I'll check the weather. {}{}function{}get_weather\n{{\"city\": \"London\"}}{}{}",
+            TOOL_CALLS_BEGIN, TOOL_CALL_BEGIN, TOOL_SEP, TOOL_CALL_END, TOOL_CALLS_END
+        );
+        let result = parser.parse(&text);
+        assert_eq!(result.tool_calls.len(), 1);
+        assert!(result.content.is_some());
+        assert!(result.content.unwrap().contains("check the weather"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Legacy fullwidth format tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_legacy_function_format() {
+        let parser = DeepSeekToolParser::new();
+        let text = format!(
+            "{}get_weather\n{{\"city\": \"London\"}}{}",
+            LEGACY_TOOL_CALL_BEGIN, LEGACY_TOOL_CALL_END
+        );
+        let result = parser.parse(&text);
+        assert_eq!(result.tool_calls.len(), 1);
+        assert_eq!(result.tool_calls[0].name, "get_weather");
+        assert!(result.tool_calls[0].arguments.contains("London"));
+    }
+
+    #[test]
+    fn test_legacy_json_format() {
+        let parser = DeepSeekToolParser::new();
+        let text = format!(
+            "{}{{\"name\": \"search\", \"arguments\": {{\"q\": \"rust\"}}}}{}",
+            LEGACY_TOOL_CALL_BEGIN, LEGACY_TOOL_CALL_END
+        );
+        let result = parser.parse(&text);
+        assert_eq!(result.tool_calls.len(), 1);
+        assert_eq!(result.tool_calls[0].name, "search");
+    }
+
+    #[test]
+    fn test_legacy_multiple_calls() {
+        let parser = DeepSeekToolParser::new();
+        let text = format!(
+            "{}get_weather\n{{\"city\": \"London\"}}{}{}get_time\n{{\"tz\": \"UTC\"}}{}",
+            LEGACY_TOOL_CALL_BEGIN,
+            LEGACY_TOOL_CALL_END,
+            LEGACY_TOOL_CALL_BEGIN,
+            LEGACY_TOOL_CALL_END
+        );
+        let result = parser.parse(&text);
+        assert_eq!(result.tool_calls.len(), 2);
+        assert_eq!(result.tool_calls[0].name, "get_weather");
+        assert_eq!(result.tool_calls[1].name, "get_time");
+    }
+
+    #[test]
+    fn test_legacy_with_content() {
         let parser = DeepSeekToolParser::new();
         let text = format!(
             "I'll check the weather. {}get_weather\n{{\"city\": \"London\"}}{}",
-            TOOL_CALL_BEGIN, TOOL_CALL_END
+            LEGACY_TOOL_CALL_BEGIN, LEGACY_TOOL_CALL_END
         );
         let result = parser.parse(&text);
         assert_eq!(result.tool_calls.len(), 1);

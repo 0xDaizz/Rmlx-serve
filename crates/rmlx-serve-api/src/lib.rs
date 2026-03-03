@@ -28,6 +28,7 @@
 pub mod convert;
 pub mod error;
 pub mod handlers;
+pub mod mcp;
 pub mod middleware;
 pub mod router;
 pub mod sse;

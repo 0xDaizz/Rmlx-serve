@@ -10,6 +10,9 @@ use rmlx_serve_types::SamplingParams;
 use crate::processors::*;
 use crate::sampler;
 
+/// A boxed sampler closure: takes a logits slice and returns the sampled token id.
+pub type SamplerFn = Box<dyn Fn(&[f32]) -> u32 + Send>;
+
 /// Construct a sampling closure from the given parameters.
 ///
 /// The returned closure accepts a logit slice (already copied from GPU to CPU)
@@ -18,19 +21,21 @@ use crate::sampler;
 ///
 /// Internally the closure:
 /// 1. Clones the logits to a mutable buffer.
-/// 2. Applies temperature scaling.
-/// 3. Applies top-k filtering (if `top_k > 0`).
-/// 4. Applies top-p (nucleus) filtering (if `top_p < 1.0`).
-/// 5. Applies min-p filtering (if `min_p > 0.0`).
-/// 6. Applies XTC filtering (if `xtc_probability > 0.0` and `xtc_threshold > 0.0`).
+/// 2. Applies top-p (nucleus) filtering (if `top_p < 1.0`).
+/// 3. Applies min-p filtering (if `min_p > 0.0`).
+/// 4. Applies XTC filtering (if `xtc_probability > 0.0` and `xtc_threshold > 0.0`).
+/// 5. Applies top-k filtering (if `top_k > 0`).
+/// 6. Applies temperature scaling.
 /// 7. Samples: greedy if temperature ~= 0, otherwise categorical.
-pub fn make_sampler(params: &SamplingParams) -> Box<dyn Fn(&[f32]) -> u32 + Send> {
+pub fn make_sampler(params: &SamplingParams) -> SamplerFn {
     let temperature = params.temperature;
     let top_k = params.top_k;
     let top_p = params.top_p;
     let min_p = params.min_p;
     let xtc_probability = params.xtc_probability;
     let xtc_threshold = params.xtc_threshold;
+    let stop_token_ids: std::collections::HashSet<u32> =
+        params.stop_token_ids.iter().copied().collect();
 
     // Use greedy decoding when temperature is effectively zero.
     if temperature < 1e-6 {
@@ -46,36 +51,37 @@ pub fn make_sampler(params: &SamplingParams) -> Box<dyn Fn(&[f32]) -> u32 + Send
     Box::new(move |logits: &[f32]| {
         let mut buf = logits.to_vec();
 
-        // 1. Temperature scaling.
-        let temp_proc = TemperatureProcessor { temperature };
-        LogitsProcessor::process(&temp_proc, &mut buf, &[]);
-
-        // 2. Top-k filtering.
-        if top_k > 0 {
-            let topk_proc = TopKProcessor { k: top_k };
-            LogitsProcessor::process(&topk_proc, &mut buf, &[]);
-        }
-
-        // 3. Top-p (nucleus) filtering.
+        // 1. Top-p (nucleus) filtering.
         if top_p < 1.0 {
             let topp_proc = TopPProcessor { p: top_p };
             LogitsProcessor::process(&topp_proc, &mut buf, &[]);
         }
 
-        // 4. Min-p filtering.
+        // 2. Min-p filtering.
         if min_p > 0.0 {
-            let minp_proc = MinPProcessor { p: min_p };
+            let minp_proc = MinPProcessor::new(min_p);
             LogitsProcessor::process(&minp_proc, &mut buf, &[]);
         }
 
-        // 5. XTC filtering.
+        // 3. XTC filtering.
         if xtc_probability > 0.0 && xtc_threshold > 0.0 {
             let xtc_proc = XtcProcessor {
                 probability: xtc_probability,
                 threshold: xtc_threshold,
+                excluded_token_ids: stop_token_ids.clone(),
             };
             LogitsProcessor::process(&xtc_proc, &mut buf, &[]);
         }
+
+        // 4. Top-k filtering.
+        if top_k > 0 {
+            let topk_proc = TopKProcessor { k: top_k };
+            LogitsProcessor::process(&topk_proc, &mut buf, &[]);
+        }
+
+        // 5. Temperature scaling (applied after all filters, before sampling).
+        let temp_proc = TemperatureProcessor { temperature };
+        LogitsProcessor::process(&temp_proc, &mut buf, &[]);
 
         // 6. Categorical sampling.
         let mut rng_guard = rng.lock().unwrap();
@@ -102,15 +108,14 @@ pub fn make_logits_processors(params: &SamplingParams) -> Vec<Box<dyn LogitsProc
     if (params.repetition_penalty - 1.0).abs() > f32::EPSILON {
         processors.push(Box::new(RepetitionPenaltyProcessor {
             penalty: params.repetition_penalty,
-            // Default context window for repetition penalty: 256 tokens.
+            // Default context window for repetition penalty: 20 tokens.
             // This could be made configurable in the future.
-            context_size: 256,
+            context_size: 20,
         }));
     }
 
     // Frequency and presence penalties.
-    if params.frequency_penalty.abs() > f32::EPSILON
-        || params.presence_penalty.abs() > f32::EPSILON
+    if params.frequency_penalty.abs() > f32::EPSILON || params.presence_penalty.abs() > f32::EPSILON
     {
         processors.push(Box::new(FrequencyPresencePenaltyProcessor {
             frequency_penalty: params.frequency_penalty,

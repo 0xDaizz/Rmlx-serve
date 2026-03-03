@@ -123,7 +123,10 @@ fn load_single_safetensors(
         result.insert(name.to_string(), array);
     }
 
-    info!(count = result.len(), "loaded tensors from single safetensors file");
+    info!(
+        count = result.len(),
+        "loaded tensors from single safetensors file"
+    );
     Ok(result)
 }
 
@@ -154,9 +157,7 @@ fn load_sharded_safetensors(
     for shard_name in &shard_files {
         let shard_path = base_path.join(shard_name);
         if !shard_path.exists() {
-            return Err(WeightError::ShardNotFound {
-                path: shard_path,
-            });
+            return Err(WeightError::ShardNotFound { path: shard_path });
         }
 
         debug!(shard = shard_name.as_str(), "loading shard");
@@ -244,9 +245,8 @@ pub fn load_model(path: impl AsRef<Path>) -> Result<(TransformerModel, ModelConf
     let transformer_config = config.to_transformer_config()?;
 
     // 2. Get GPU device
-    let gpu = GpuDevice::system_default().map_err(|e| {
-        WeightError::InvalidConfig(format!("failed to acquire Metal device: {e}"))
-    })?;
+    let gpu = GpuDevice::system_default()
+        .map_err(|e| WeightError::InvalidConfig(format!("failed to acquire Metal device: {e}")))?;
     let device = gpu.raw();
 
     // 3. Load safetensors
@@ -263,6 +263,29 @@ pub fn load_model(path: impl AsRef<Path>) -> Result<(TransformerModel, ModelConf
 
     // 5. Sanitize weights
     weights = sanitize::sanitize_weights(weights, &config.model_type);
+
+    // 5b. Ensure tied word embeddings are handled.
+    //     sanitize_weights already ties lm_head.weight -> embed_tokens.weight when
+    //     lm_head.weight is absent, but we double-check here using the explicit
+    //     config flag for models that set tie_word_embeddings = true.
+    if config.tie_word_embeddings == Some(true) && !weights.contains_key("lm_head.weight") {
+        let tied = weights
+            .get("model.embed_tokens.weight")
+            .map(|embed_weight| {
+                let shape = embed_weight.shape().to_vec();
+                let strides = embed_weight.strides().to_vec();
+                let offset = embed_weight.offset();
+                embed_weight.view(shape, strides, offset)
+            });
+        if let Some(tied_array) = tied {
+            info!("tie_word_embeddings=true: tying lm_head.weight to embed_tokens.weight");
+            weights.insert("lm_head.weight".to_string(), tied_array);
+        } else {
+            warn!(
+                "tie_word_embeddings=true but neither lm_head.weight nor embed_tokens.weight found"
+            );
+        }
+    }
 
     // 6. Map and assemble
     let mapper = mapper::create_weight_mapper(&config.model_type);
@@ -437,9 +460,7 @@ fn assemble_model(
             WeightError::MissingWeight(format!("model.layers.{i}.input_layernorm.weight"))
         })?;
         let layer_ffn_norm = ffn_norm[i].take().ok_or_else(|| {
-            WeightError::MissingWeight(format!(
-                "model.layers.{i}.post_attention_layernorm.weight"
-            ))
+            WeightError::MissingWeight(format!("model.layers.{i}.post_attention_layernorm.weight"))
         })?;
 
         // Build attention
@@ -504,7 +525,8 @@ fn assemble_model(
             None,
         )?;
 
-        let attention = Attention::from_layers(attn_config, q_linear, k_linear, v_linear, o_linear)?;
+        let attention =
+            Attention::from_layers(attn_config, q_linear, k_linear, v_linear, o_linear)?;
 
         // Build FFN: dense or MoE depending on config and available weights
         let ffn = build_ffn(
@@ -531,7 +553,13 @@ fn assemble_model(
         layers.push(block);
     }
 
-    let model = TransformerModel::from_parts(duplicate_config(config), embedding, layers, final_norm_w, lm_head)?;
+    let model = TransformerModel::from_parts(
+        duplicate_config(config),
+        embedding,
+        layers,
+        final_norm_w,
+        lm_head,
+    )?;
     Ok(model)
 }
 
@@ -598,19 +626,13 @@ fn build_ffn(
         let mut experts = Vec::with_capacity(num_experts);
         for e in 0..num_experts {
             let eg = expert_gate_proj[layer_idx].remove(&e).ok_or_else(|| {
-                WeightError::MissingWeight(format!(
-                    "layer {layer_idx} expert {e} gate_proj weight"
-                ))
+                WeightError::MissingWeight(format!("layer {layer_idx} expert {e} gate_proj weight"))
             })?;
             let eu = expert_up_proj[layer_idx].remove(&e).ok_or_else(|| {
-                WeightError::MissingWeight(format!(
-                    "layer {layer_idx} expert {e} up_proj weight"
-                ))
+                WeightError::MissingWeight(format!("layer {layer_idx} expert {e} up_proj weight"))
             })?;
             let ed = expert_down_proj[layer_idx].remove(&e).ok_or_else(|| {
-                WeightError::MissingWeight(format!(
-                    "layer {layer_idx} expert {e} down_proj weight"
-                ))
+                WeightError::MissingWeight(format!("layer {layer_idx} expert {e} down_proj weight"))
             })?;
 
             let expert_gate = Linear::from_arrays(
@@ -658,19 +680,13 @@ fn build_ffn(
         };
 
         let gp = gate_proj[layer_idx].take().ok_or_else(|| {
-            WeightError::MissingWeight(format!(
-                "model.layers.{layer_idx}.mlp.gate_proj.weight"
-            ))
+            WeightError::MissingWeight(format!("model.layers.{layer_idx}.mlp.gate_proj.weight"))
         })?;
         let up = up_proj[layer_idx].take().ok_or_else(|| {
-            WeightError::MissingWeight(format!(
-                "model.layers.{layer_idx}.mlp.up_proj.weight"
-            ))
+            WeightError::MissingWeight(format!("model.layers.{layer_idx}.mlp.up_proj.weight"))
         })?;
         let dp = down_proj[layer_idx].take().ok_or_else(|| {
-            WeightError::MissingWeight(format!(
-                "model.layers.{layer_idx}.mlp.down_proj.weight"
-            ))
+            WeightError::MissingWeight(format!("model.layers.{layer_idx}.mlp.down_proj.weight"))
         })?;
 
         let gate_linear = Linear::from_arrays(

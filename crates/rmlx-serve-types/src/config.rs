@@ -35,6 +35,15 @@ pub struct SchedulerConfig {
     /// Number of scheduler steps to look ahead when pre-allocating KV cache
     /// blocks. Higher values reduce stalls but may waste memory.
     pub lookahead_slots: usize,
+
+    /// Maximum number of sequences to prefill in a single batch.
+    pub prefill_batch_size: usize,
+
+    /// Maximum number of sequences in a single decode batch.
+    pub completion_batch_size: usize,
+
+    /// Emit a streaming token every N decode steps.
+    pub stream_interval: usize,
 }
 
 impl Default for SchedulerConfig {
@@ -48,6 +57,9 @@ impl Default for SchedulerConfig {
             max_prefill_chunk_size: 2048,
             policy: "fcfs".to_string(),
             lookahead_slots: 0,
+            prefill_batch_size: 8,
+            completion_batch_size: 32,
+            stream_interval: 1,
         }
     }
 }
@@ -82,6 +94,42 @@ pub struct CacheConfig {
 
     /// Enable prefix caching (automatic prompt prefix sharing).
     pub enable_prefix_caching: bool,
+
+    /// Maximum number of prefix cache entries.
+    pub prefix_cache_size: usize,
+
+    /// Explicit memory budget (in MiB) for the KV-cache. When set, overrides
+    /// `cache_memory_percent`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_memory_mb: Option<usize>,
+
+    /// Fraction of device memory to use for KV-cache (0.0 to 1.0).
+    /// Only used when `cache_memory_mb` is `None`.
+    pub cache_memory_percent: f64,
+
+    /// Use memory-aware cache eviction (considers actual memory pressure).
+    pub use_memory_aware_cache: bool,
+
+    /// Enable KV-cache quantization to reduce memory usage.
+    pub kv_cache_quantization: bool,
+
+    /// Number of bits for KV-cache quantization (e.g. 4, 8).
+    pub kv_cache_quantization_bits: u8,
+
+    /// Group size for KV-cache quantization.
+    pub kv_cache_quantization_group_size: usize,
+
+    /// Minimum number of tokens before applying KV-cache quantization.
+    pub kv_cache_min_quantize_tokens: usize,
+
+    /// Enable paged KV-cache (vLLM-style block management).
+    pub use_paged_cache: bool,
+
+    /// Block size (in tokens) for the paged KV-cache.
+    pub paged_cache_block_size: usize,
+
+    /// Maximum number of paged cache blocks.
+    pub max_cache_blocks: usize,
 }
 
 impl Default for CacheConfig {
@@ -95,6 +143,17 @@ impl Default for CacheConfig {
             head_dim: None,
             dtype: "f16".to_string(),
             enable_prefix_caching: false,
+            prefix_cache_size: 100,
+            cache_memory_mb: None,
+            cache_memory_percent: 0.20,
+            use_memory_aware_cache: true,
+            kv_cache_quantization: false,
+            kv_cache_quantization_bits: 8,
+            kv_cache_quantization_group_size: 64,
+            kv_cache_min_quantize_tokens: 256,
+            use_paged_cache: false,
+            paged_cache_block_size: 64,
+            max_cache_blocks: 1000,
         }
     }
 }
@@ -155,6 +214,59 @@ pub struct EngineConfig {
 
     /// Number of draft tokens for speculative decoding.
     pub speculative_draft_len: usize,
+
+    /// Speculative decoding method name (e.g. "ngram", "draft", "mtp").
+    /// `None` means speculative decoding is disabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speculative_method: Option<String>,
+
+    /// Path or repo id for the draft model (speculative decoding).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub draft_model: Option<String>,
+
+    /// Path or repo id for the MTP (multi-token prediction) model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mtp_model: Option<String>,
+
+    /// Enable multi-token prediction.
+    pub enable_mtp: bool,
+
+    /// Number of draft tokens for MTP.
+    pub mtp_num_draft_tokens: usize,
+
+    /// Use optimistic acceptance for MTP (accept all draft tokens greedily).
+    pub mtp_optimistic: bool,
+
+    /// Disable speculative decoding when batch size exceeds this value.
+    /// `None` means never auto-disable based on batch size.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spec_decode_disable_batch_size: Option<usize>,
+
+    /// Acceptance rate threshold below which speculative decoding is
+    /// automatically disabled.
+    pub spec_decode_auto_disable_threshold: f64,
+
+    /// Rolling window size (in steps) used to compute the acceptance rate
+    /// for auto-disable.
+    pub spec_decode_auto_disable_window: usize,
+
+    /// Enable extended-thinking / chain-of-thought support.
+    pub enable_thinking: bool,
+
+    /// Reasoning output parser to use (e.g. "deepseek").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_parser: Option<String>,
+
+    /// Enable automatic tool-call detection in model output.
+    pub enable_auto_tool_choice: bool,
+
+    /// Tool-call output parser to use (e.g. "hermes", "llama3").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_parser: Option<String>,
+
+    /// Multimodal LLM model identifier (e.g. "llava", "qwen-vl").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mllm: Option<String>,
 }
 
 impl Default for EngineConfig {
@@ -175,6 +287,20 @@ impl Default for EngineConfig {
             enable_speculative: false,
             speculative_model: None,
             speculative_draft_len: 5,
+            speculative_method: None,
+            draft_model: None,
+            mtp_model: None,
+            enable_mtp: false,
+            mtp_num_draft_tokens: 1,
+            mtp_optimistic: false,
+            spec_decode_disable_batch_size: None,
+            spec_decode_auto_disable_threshold: 0.4,
+            spec_decode_auto_disable_window: 50,
+            enable_thinking: false,
+            reasoning_parser: None,
+            enable_auto_tool_choice: false,
+            tool_call_parser: None,
+            mllm: None,
         }
     }
 }
@@ -226,6 +352,28 @@ pub struct ServerConfig {
     /// Optional SSL key path for HTTPS.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ssl_key_path: Option<String>,
+
+    /// Rate limit: maximum requests per second per client. 0 = no limit.
+    pub rate_limit: usize,
+
+    /// Maximum number of tokens the server will generate per request.
+    pub max_tokens: usize,
+
+    /// Default sampling temperature applied when the client does not specify one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_temperature: Option<f64>,
+
+    /// Default top-p value applied when the client does not specify one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_top_p: Option<f64>,
+
+    /// Path to an MCP configuration file (`mcp.json`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp_config: Option<String>,
+
+    /// Optional embedding model path or repo id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embedding_model: Option<String>,
 }
 
 impl Default for ServerConfig {
@@ -243,6 +391,12 @@ impl Default for ServerConfig {
             log_level: "info".to_string(),
             ssl_cert_path: None,
             ssl_key_path: None,
+            rate_limit: 0,
+            max_tokens: 32768,
+            default_temperature: None,
+            default_top_p: None,
+            mcp_config: None,
+            embedding_model: None,
         }
     }
 }

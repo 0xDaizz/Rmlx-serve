@@ -34,8 +34,8 @@ pub use config::{ModelConfig, QuantizationConfig};
 pub use error::WeightError;
 pub use loader::{load_model, load_safetensors};
 pub use mapper::{
-    create_weight_mapper, MappedWeight, WeightComponent, WeightMapper,
-    DeepSeekWeightMapper, LlamaWeightMapper, MixtralWeightMapper, QwenWeightMapper,
+    create_weight_mapper, DeepSeekWeightMapper, LlamaWeightMapper, MappedWeight,
+    MixtralWeightMapper, QwenWeightMapper, WeightComponent, WeightMapper,
 };
 pub use quantization::{detect_quantization, QuantMethod};
 pub use sanitize::sanitize_weights;

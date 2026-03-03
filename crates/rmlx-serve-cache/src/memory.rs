@@ -119,8 +119,9 @@ impl MemoryAwarePrefixCache {
 
         while self.current_usage_bytes > target {
             if let Some(_block_id) = self.prefix_cache.evict_lru() {
-                self.current_usage_bytes =
-                    self.current_usage_bytes.saturating_sub(self.bytes_per_block);
+                self.current_usage_bytes = self
+                    .current_usage_bytes
+                    .saturating_sub(self.bytes_per_block);
                 tracing::debug!(
                     "evicted block, usage now {} MB",
                     self.current_usage_bytes / (1024 * 1024)
@@ -161,8 +162,9 @@ impl MemoryAwarePrefixCache {
     pub fn evict_lru(&mut self) -> Option<usize> {
         let evicted = self.prefix_cache.evict_lru();
         if evicted.is_some() {
-            self.current_usage_bytes =
-                self.current_usage_bytes.saturating_sub(self.bytes_per_block);
+            self.current_usage_bytes = self
+                .current_usage_bytes
+                .saturating_sub(self.bytes_per_block);
         }
         evicted
     }
@@ -261,8 +263,7 @@ mod tests {
         // Just ensure it doesn't panic and returns a non-zero value.
         // In sandboxed environments, sysinfo may return 0 for available_memory;
         // our implementation falls back to free_memory or usize::MAX.
-        let mb = MemoryAwarePrefixCache::available_memory_mb();
-        // The value should always be positive (either real memory info or usize::MAX fallback).
-        assert!(mb > 0 || mb == 0, "available_memory_mb should not panic");
+        let _mb = MemoryAwarePrefixCache::available_memory_mb();
+        // If we reach here without panicking, the function works correctly.
     }
 }

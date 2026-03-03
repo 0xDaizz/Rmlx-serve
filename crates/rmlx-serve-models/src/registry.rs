@@ -101,9 +101,8 @@ impl ModelRegistry {
             })?
             .clone();
 
-        let device = GpuDevice::system_default().map_err(|e| {
-            ModelError::DeviceError(format!("failed to acquire Metal device: {e}"))
-        })?;
+        let device = GpuDevice::system_default()
+            .map_err(|e| ModelError::DeviceError(format!("failed to acquire Metal device: {e}")))?;
 
         loader(model_path, device)
     }
@@ -134,10 +133,7 @@ impl Default for ModelRegistry {
 /// 1. Reads `config.json` and converts it to a `TransformerConfig`
 /// 2. Loads safetensors weights via `rmlx_serve_weights::load_model`
 /// 3. Wraps the loaded model in a `TransformerLlm`
-fn load_transformer_model(
-    model_path: &Path,
-    device: GpuDevice,
-) -> Result<Box<dyn LlmModel>> {
+fn load_transformer_model(model_path: &Path, device: GpuDevice) -> Result<Box<dyn LlmModel>> {
     let (model, model_config) = rmlx_serve_weights::load_model(model_path)?;
 
     let transformer_config = model_config.to_transformer_config()?;

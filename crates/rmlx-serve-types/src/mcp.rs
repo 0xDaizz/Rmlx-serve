@@ -136,9 +136,7 @@ pub enum MCPToolResultContent {
     },
 
     /// An embedded resource.
-    Resource {
-        resource: MCPResource,
-    },
+    Resource { resource: MCPResource },
 }
 
 /// An embedded resource in an MCP tool result.
@@ -162,10 +160,11 @@ pub struct MCPResource {
 // ===========================================================================
 
 /// Runtime state of a connected MCP server.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MCPServerState {
     /// The server has not been started yet.
+    #[default]
     NotStarted,
     /// The server is currently being initialised (handshake in progress).
     Connecting,
@@ -175,12 +174,6 @@ pub enum MCPServerState {
     Error,
     /// The server has been intentionally stopped.
     Stopped,
-}
-
-impl Default for MCPServerState {
-    fn default() -> Self {
-        Self::NotStarted
-    }
 }
 
 /// Runtime information about a connected MCP server.

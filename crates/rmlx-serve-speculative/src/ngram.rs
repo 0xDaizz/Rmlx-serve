@@ -27,6 +27,11 @@ pub struct NgramProposer {
     table: HashMap<Vec<u32>, Vec<u32>>,
     /// Minimum number of context tokens required before proposing.
     min_context: usize,
+    /// Number of tokens already indexed from the context. This enables
+    /// incremental updates: on each call to `update_incremental`, only the
+    /// new n-grams (those involving tokens at positions >= `indexed_up_to`)
+    /// are added to the table, avoiding redundant work.
+    indexed_up_to: usize,
 }
 
 impl NgramProposer {
@@ -44,6 +49,7 @@ impl NgramProposer {
             n,
             table: HashMap::new(),
             min_context: n - 1,
+            indexed_up_to: 0,
         }
     }
 
@@ -60,11 +66,42 @@ impl NgramProposer {
         for window in tokens.windows(self.n) {
             let prefix = window[..self.n - 1].to_vec();
             let next_token = window[self.n - 1];
-            let entry = self.table.entry(prefix).or_insert_with(Vec::new);
+            let entry = self.table.entry(prefix).or_default();
             // Append the next token. The most recent occurrence will be at the
             // end of the vec, which is what we pick during greedy proposal.
             entry.push(next_token);
         }
+    }
+
+    /// Incrementally update the n-gram table with only the new tokens since
+    /// the last call.
+    ///
+    /// This avoids re-scanning the entire token history on every propose() call.
+    /// Only n-gram windows that include at least one new token are indexed.
+    fn update_incremental(&mut self, tokens: &[u32]) {
+        if tokens.len() < self.n {
+            return;
+        }
+
+        // Determine the start of the first new window. Each window of size `n`
+        // ending at index `i` starts at index `i - n + 1`. We need to index
+        // all windows whose last element is at position >= indexed_up_to.
+        // The window ending at position `p` starts at `p - n + 1`.
+        let start = if self.indexed_up_to >= self.n {
+            // We already indexed windows ending before indexed_up_to.
+            // The first new window starts at indexed_up_to - (n - 1).
+            self.indexed_up_to - (self.n - 1)
+        } else {
+            0
+        };
+
+        for window in tokens[start..].windows(self.n) {
+            let prefix = window[..self.n - 1].to_vec();
+            let next_token = window[self.n - 1];
+            self.table.entry(prefix).or_default().push(next_token);
+        }
+
+        self.indexed_up_to = tokens.len();
     }
 
     /// Look up the next token for a given (n-1)-token prefix.
@@ -72,7 +109,9 @@ impl NgramProposer {
     /// Returns the most recently observed next token (last in the list),
     /// or `None` if the prefix has not been seen.
     fn lookup(&self, prefix: &[u32]) -> Option<u32> {
-        self.table.get(prefix).and_then(|nexts| nexts.last().copied())
+        self.table
+            .get(prefix)
+            .and_then(|nexts| nexts.last().copied())
     }
 }
 
@@ -87,9 +126,9 @@ impl Proposer for NgramProposer {
             )));
         }
 
-        // Update the table with the current context so we can match against
-        // patterns we have already seen.
-        self.update(context_tokens);
+        // Incrementally update the table with only new tokens since the last
+        // call, avoiding redundant re-scanning of the full context history.
+        self.update_incremental(context_tokens);
 
         let prefix_len = self.n - 1;
         let mut token_ids = Vec::with_capacity(k);
@@ -141,6 +180,7 @@ impl Proposer for NgramProposer {
 
     fn reset(&mut self) {
         self.table.clear();
+        self.indexed_up_to = 0;
     }
 
     fn name(&self) -> &str {

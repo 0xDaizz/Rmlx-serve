@@ -18,8 +18,11 @@
 //! - **[`generate_text`]** -- Convenience function for one-shot CLI generation.
 
 pub mod batched;
+pub mod distributed;
+pub mod ep;
 pub mod error;
 pub mod generation;
+pub mod hardware;
 pub mod simple;
 pub mod traits;
 
@@ -31,6 +34,7 @@ use tokio::sync::mpsc;
 // Re-export concrete implementations.
 pub use batched::BatchedEngine;
 pub use generation::{generate_text, GenerationResponse};
+pub use hardware::{HardwareProfile, OptimizationHints};
 pub use simple::SimpleEngine;
 
 // ---------------------------------------------------------------------------
@@ -117,6 +121,11 @@ pub trait Engine: Send + Sync + 'static {
 
     /// Decode token IDs back to text using the engine's tokenizer.
     fn decode(&self, token_ids: &[u32]) -> Result<String, EngineError>;
+
+    /// Whether the engine is currently running and ready to accept requests.
+    fn is_running(&self) -> bool {
+        true
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -54,7 +54,10 @@ impl QuantizedKVCache {
         bits: usize,
         group_size: usize,
     ) -> Self {
-        assert!(bits == 4 || bits == 8, "bits must be 4 or 8, got {bits}");
+        assert!(
+            bits == 4 || bits == 8,
+            "bits must be 4 or 8, got {bits}"
+        );
         assert!(
             head_dim % group_size == 0 || group_size > head_dim,
             "head_dim ({head_dim}) should be divisible by group_size ({group_size}) \
@@ -83,7 +86,13 @@ impl QuantizedKVCache {
     /// `num_kv_heads * new_tokens * head_dim`.
     ///
     /// The data is quantized and appended to the stored cache.
-    pub fn append(&mut self, layer: usize, keys: &[f32], values: &[f32], new_tokens: usize) {
+    pub fn append(
+        &mut self,
+        layer: usize,
+        keys: &[f32],
+        values: &[f32],
+        new_tokens: usize,
+    ) {
         let expected_len = self.num_kv_heads * new_tokens * self.head_dim;
         assert_eq!(
             keys.len(),
@@ -236,7 +245,9 @@ impl QuantizedKVCache {
             8 => {
                 let bytes: Vec<u8> = data
                     .iter()
-                    .map(|&v| ((v - min_val) / scale).round().clamp(0.0, qmax) as u8)
+                    .map(|&v| {
+                        ((v - min_val) / scale).round().clamp(0.0, qmax) as u8
+                    })
                     .collect();
                 (bytes, scale, min_val)
             }
@@ -265,7 +276,10 @@ impl QuantizedKVCache {
     /// Reverses the quantization: value = quantized * scale + zero_point.
     fn dequantize_group(data: &[u8], scale: f32, zero: f32, bits: usize) -> Vec<f32> {
         match bits {
-            8 => data.iter().map(|&b| (b as f32) * scale + zero).collect(),
+            8 => data
+                .iter()
+                .map(|&b| (b as f32) * scale + zero)
+                .collect(),
             4 => {
                 let mut result = Vec::with_capacity(data.len() * 2);
                 for &byte in data {
@@ -318,7 +332,10 @@ mod tests {
         // 4-bit only has 16 levels so some quantization error is expected.
         assert_eq!(recovered.len(), data.len());
         for (orig, rec) in data.iter().zip(recovered.iter()) {
-            assert!((orig - rec).abs() < 0.6, "4-bit roundtrip: {orig} -> {rec}");
+            assert!(
+                (orig - rec).abs() < 0.6,
+                "4-bit roundtrip: {orig} -> {rec}"
+            );
         }
     }
 
@@ -339,7 +356,10 @@ mod tests {
 
         // Check approximate roundtrip
         for (orig, rec) in keys.iter().zip(dk.iter()) {
-            assert!((orig - rec).abs() < 0.1, "key roundtrip: {orig} -> {rec}");
+            assert!(
+                (orig - rec).abs() < 0.1,
+                "key roundtrip: {orig} -> {rec}"
+            );
         }
     }
 
@@ -351,7 +371,10 @@ mod tests {
         let recovered = QuantizedKVCache::dequantize_group(&bytes, scale, zero, 8);
 
         for &v in &recovered {
-            assert!((v - 42.0).abs() < 0.01, "constant roundtrip: 42.0 -> {v}");
+            assert!(
+                (v - 42.0).abs() < 0.01,
+                "constant roundtrip: 42.0 -> {v}"
+            );
         }
     }
 

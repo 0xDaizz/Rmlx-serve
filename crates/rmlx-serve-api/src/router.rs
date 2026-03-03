@@ -12,7 +12,7 @@ use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
 
 use crate::handlers;
-use crate::middleware::auth_middleware;
+use crate::middleware::{auth_middleware, rate_limit_middleware};
 use crate::state::AppState;
 
 /// Build the complete Axum router with all routes, middleware, and layers.
@@ -28,7 +28,8 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/v1/models", get(handlers::list_models))
         .route("/v1/embeddings", post(handlers::embeddings))
         .route("/v1/messages", post(handlers::anthropic_messages))
-        .route("/v1/mcp/tools", get(handlers::mcp_list_tools))
+        .route("/v1/mcp/tools", post(handlers::mcp_list_tools))
+        .route("/v1/mcp/execute", post(handlers::mcp_execute_tool))
         .route("/v1/mcp/servers", get(handlers::mcp_list_servers));
 
     // Conditionally apply auth middleware only if an API key is configured.
@@ -36,6 +37,16 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         api_routes.route_layer(middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,
+        ))
+    } else {
+        api_routes
+    };
+
+    // Conditionally apply rate-limiting middleware when rate_limit > 0.
+    let api_routes = if state.config.rate_limit > 0 {
+        api_routes.route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            rate_limit_middleware,
         ))
     } else {
         api_routes

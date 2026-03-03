@@ -13,5 +13,5 @@ pub use chat::chat_completions;
 pub use completions::completions;
 pub use embeddings::embeddings;
 pub use health::{health_check, metrics};
-pub use mcp::{mcp_list_servers, mcp_list_tools};
+pub use mcp::{mcp_execute_tool, mcp_list_servers, mcp_list_tools};
 pub use models::list_models;

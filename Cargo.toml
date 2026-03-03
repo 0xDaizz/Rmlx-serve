@@ -1,0 +1,70 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/rmlx-serve-types",
+    "crates/rmlx-serve-tokenizer",
+    "crates/rmlx-serve-weights",
+    "crates/rmlx-serve-sampling",
+    "crates/rmlx-serve-models",
+    "crates/rmlx-serve-cache",
+    "crates/rmlx-serve-scheduler",
+    "crates/rmlx-serve-engine",
+    "crates/rmlx-serve-speculative",
+    "crates/rmlx-serve-tools",
+    "crates/rmlx-serve-api",
+    "crates/rmlx-serve-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+# RMLX path dependencies
+rmlx-core = { path = "../RMLX/crates/rmlx-core" }
+rmlx-nn = { path = "../RMLX/crates/rmlx-nn" }
+rmlx-metal = { path = "../RMLX/crates/rmlx-metal" }
+rmlx-alloc = { path = "../RMLX/crates/rmlx-alloc" }
+rmlx-distributed = { path = "../RMLX/crates/rmlx-distributed" }
+rmlx-rdma = { path = "../RMLX/crates/rmlx-rdma" }
+
+# Internal workspace crates
+rmlx-serve-types = { path = "crates/rmlx-serve-types" }
+rmlx-serve-tokenizer = { path = "crates/rmlx-serve-tokenizer" }
+rmlx-serve-weights = { path = "crates/rmlx-serve-weights" }
+rmlx-serve-sampling = { path = "crates/rmlx-serve-sampling" }
+rmlx-serve-models = { path = "crates/rmlx-serve-models" }
+rmlx-serve-cache = { path = "crates/rmlx-serve-cache" }
+rmlx-serve-scheduler = { path = "crates/rmlx-serve-scheduler" }
+rmlx-serve-engine = { path = "crates/rmlx-serve-engine" }
+rmlx-serve-speculative = { path = "crates/rmlx-serve-speculative" }
+rmlx-serve-tools = { path = "crates/rmlx-serve-tools" }
+rmlx-serve-api = { path = "crates/rmlx-serve-api" }
+
+# Shared dependencies
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+uuid = { version = "1", features = ["v4", "serde"] }
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+clap = { version = "4", features = ["derive"] }
+axum = { version = "0.7", features = ["ws"] }
+tower = { version = "0.5", features = ["full"] }
+tower-http = { version = "0.6", features = ["cors", "trace", "timeout"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+tokenizers = { version = "0.21", default-features = false, features = ["onig"] }
+minijinja = { version = "2", features = ["builtins"] }
+safetensors = "0.4"
+rand = "0.8"
+regex = "1"
+async-trait = "0.1"
+futures-core = "0.3"
+futures-util = "0.3"
+
+# Metal ecosystem (matching RMLX)
+metal = "0.31"
+objc = "0.2"

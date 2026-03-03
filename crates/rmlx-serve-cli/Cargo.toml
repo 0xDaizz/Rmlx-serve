@@ -1,0 +1,31 @@
+[package]
+name = "rmlx-serve-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "rmlx-serve"
+path = "src/main.rs"
+
+[dependencies]
+rmlx-serve-types.workspace = true
+rmlx-serve-tokenizer.workspace = true
+rmlx-serve-weights.workspace = true
+rmlx-serve-sampling.workspace = true
+rmlx-serve-models.workspace = true
+rmlx-serve-cache.workspace = true
+rmlx-serve-scheduler.workspace = true
+rmlx-serve-engine.workspace = true
+rmlx-serve-speculative.workspace = true
+rmlx-serve-tools.workspace = true
+rmlx-serve-api.workspace = true
+clap.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+axum.workspace = true
+async-trait.workspace = true

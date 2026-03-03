@@ -1,0 +1,18 @@
+[package]
+name = "rmlx-serve-weights"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+rmlx-serve-types.workspace = true
+rmlx-core.workspace = true
+rmlx-nn.workspace = true
+rmlx-metal.workspace = true
+safetensors.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+metal.workspace = true

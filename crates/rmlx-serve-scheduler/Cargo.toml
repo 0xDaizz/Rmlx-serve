@@ -1,0 +1,19 @@
+[package]
+name = "rmlx-serve-scheduler"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+rmlx-serve-types.workspace = true
+rmlx-serve-cache.workspace = true
+rmlx-serve-models.workspace = true
+rmlx-serve-sampling.workspace = true
+rmlx-core.workspace = true
+rmlx-nn.workspace = true
+rmlx-metal.workspace = true
+metal.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+tracing.workspace = true

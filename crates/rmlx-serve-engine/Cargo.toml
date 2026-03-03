@@ -1,0 +1,30 @@
+[package]
+name = "rmlx-serve-engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+rmlx-serve-types.workspace = true
+rmlx-serve-tokenizer.workspace = true
+rmlx-serve-models.workspace = true
+rmlx-serve-cache.workspace = true
+rmlx-serve-scheduler.workspace = true
+rmlx-serve-sampling.workspace = true
+rmlx-core.workspace = true
+rmlx-nn.workspace = true
+rmlx-metal.workspace = true
+tokio.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dependencies.rmlx-distributed]
+workspace = true
+optional = true
+
+[features]
+default = []
+distributed = ["rmlx-distributed"]

@@ -1,0 +1,21 @@
+[package]
+name = "rmlx-serve-cache"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+rmlx-serve-types.workspace = true
+rmlx-core.workspace = true
+rmlx-nn.workspace = true
+rmlx-alloc.workspace = true
+rmlx-metal.workspace = true
+safetensors.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+sysinfo = "0.33"

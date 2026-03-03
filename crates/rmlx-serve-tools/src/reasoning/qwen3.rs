@@ -11,9 +11,8 @@ use std::sync::LazyLock;
 use crate::reasoning_parser::ReasoningParser;
 use crate::types::ReasoningParseResult;
 
-static THINK_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?s)<think>(.*?)</think>").unwrap()
-});
+static THINK_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?s)<think>(.*?)</think>").unwrap());
 
 /// Parser for Qwen3-style reasoning blocks.
 pub struct Qwen3Parser {
@@ -89,32 +88,29 @@ impl ReasoningParser for Qwen3Parser {
                     self.raw_buffer.clear();
                     return None;
                 }
+            } else if let Some(start_pos) = self.raw_buffer.find("<think>") {
+                let content_part = &self.raw_buffer[..start_pos];
+                self.content_buffer.push_str(content_part);
+                self.in_think = true;
+                self.raw_buffer = self.raw_buffer[start_pos + "<think>".len()..].to_string();
             } else {
-                if let Some(start_pos) = self.raw_buffer.find("<think>") {
-                    let content_part = &self.raw_buffer[..start_pos];
-                    self.content_buffer.push_str(content_part);
-                    self.in_think = true;
-                    self.raw_buffer = self.raw_buffer[start_pos + "<think>".len()..].to_string();
-                } else {
-                    let potential_tag = "<think>";
-                    let mut partial_len = 0;
-                    for i in 1..potential_tag.len() {
-                        if self.raw_buffer.ends_with(&potential_tag[..i]) {
-                            partial_len = i;
-                            break;
-                        }
-                    }
-                    if partial_len > 0 {
-                        let safe_end = self.raw_buffer.len() - partial_len;
-                        self.content_buffer
-                            .push_str(&self.raw_buffer[..safe_end]);
-                        self.raw_buffer = self.raw_buffer[safe_end..].to_string();
+                let potential_tag = "<think>";
+                let mut partial_len = 0;
+                for i in 1..potential_tag.len() {
+                    if self.raw_buffer.ends_with(&potential_tag[..i]) {
+                        partial_len = i;
                         break;
                     }
-                    self.content_buffer.push_str(&self.raw_buffer);
-                    self.raw_buffer.clear();
+                }
+                if partial_len > 0 {
+                    let safe_end = self.raw_buffer.len() - partial_len;
+                    self.content_buffer.push_str(&self.raw_buffer[..safe_end]);
+                    self.raw_buffer = self.raw_buffer[safe_end..].to_string();
                     break;
                 }
+                self.content_buffer.push_str(&self.raw_buffer);
+                self.raw_buffer.clear();
+                break;
             }
         }
 

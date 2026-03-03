@@ -55,9 +55,7 @@ impl RejectionSampler {
     ///   matches the draft token. If `false`, use stochastic rejection
     ///   sampling with probability `min(1, p_target/p_draft)`.
     pub fn new(greedy: bool) -> Self {
-        Self {
-            use_greedy: greedy,
-        }
+        Self { use_greedy: greedy }
     }
 
     /// Verify draft tokens against target model probability distributions.
@@ -99,11 +97,7 @@ impl RejectionSampler {
     }
 
     /// Greedy verification: accept while target argmax equals draft token.
-    fn verify_greedy(
-        &self,
-        target_probs: &[Vec<f32>],
-        draft_tokens: &[u32],
-    ) -> VerificationResult {
+    fn verify_greedy(&self, target_probs: &[Vec<f32>], draft_tokens: &[u32]) -> VerificationResult {
         let k = draft_tokens.len();
         let mut accepted_tokens = Vec::with_capacity(k);
 
@@ -238,8 +232,7 @@ impl RejectionSampler {
         let vocab_size = target_p.len();
         let mut adjusted = Vec::with_capacity(vocab_size);
 
-        let has_draft_probs =
-            position < draft_probs.len() && !draft_probs[position].is_empty();
+        let has_draft_probs = position < draft_probs.len() && !draft_probs[position].is_empty();
 
         for v in 0..vocab_size {
             let p_t = target_p[v];
@@ -392,7 +385,10 @@ mod tests {
         // adjusted = [0.3, 0.0, 0.3] -> normalized to [0.5, 0.0, 0.5]
         // So bonus should be 0 or 2, never 1.
         let bonus = result.bonus_token.unwrap();
-        assert!(bonus == 0 || bonus == 2, "bonus was {bonus}, expected 0 or 2");
+        assert!(
+            bonus == 0 || bonus == 2,
+            "bonus was {bonus}, expected 0 or 2"
+        );
     }
 
     #[test]

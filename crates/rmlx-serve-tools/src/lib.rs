@@ -45,6 +45,5 @@ pub mod types;
 pub use reasoning_parser::{ReasoningParser, ReasoningParserRegistry};
 pub use tool_parser::{ToolCallParser, ToolParserRegistry};
 pub use types::{
-    DeltaToolCall, ParsedToolCall, ReasoningParseResult, StreamingParseResult,
-    ToolCallParseResult,
+    DeltaToolCall, ParsedToolCall, ReasoningParseResult, StreamingParseResult, ToolCallParseResult,
 };

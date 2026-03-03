@@ -276,9 +276,10 @@ impl PagedCacheManager {
     /// Returns the block_id if a block with the given hash exists and
     /// is still allocated (ref_count > 0).
     pub fn lookup_hash(&self, hash: u64) -> Option<usize> {
-        self.hash_to_block.get(&hash).copied().filter(|&id| {
-            self.blocks[id].ref_count > 0
-        })
+        self.hash_to_block
+            .get(&hash)
+            .copied()
+            .filter(|&id| self.blocks[id].ref_count > 0)
     }
 
     /// Append tokens to a block.

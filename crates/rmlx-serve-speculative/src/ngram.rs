@@ -98,10 +98,7 @@ impl NgramProposer {
         for window in tokens[start..].windows(self.n) {
             let prefix = window[..self.n - 1].to_vec();
             let next_token = window[self.n - 1];
-            self.table
-                .entry(prefix)
-                .or_default()
-                .push(next_token);
+            self.table.entry(prefix).or_default().push(next_token);
         }
 
         self.indexed_up_to = tokens.len();
@@ -112,7 +109,9 @@ impl NgramProposer {
     /// Returns the most recently observed next token (last in the list),
     /// or `None` if the prefix has not been seen.
     fn lookup(&self, prefix: &[u32]) -> Option<u32> {
-        self.table.get(prefix).and_then(|nexts| nexts.last().copied())
+        self.table
+            .get(prefix)
+            .and_then(|nexts| nexts.last().copied())
     }
 }
 

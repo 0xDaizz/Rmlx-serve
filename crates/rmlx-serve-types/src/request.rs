@@ -299,14 +299,12 @@ pub struct RequestMetrics {
 impl RequestMetrics {
     /// Time-to-first-token in seconds, if available.
     pub fn ttft(&self) -> Option<f64> {
-        self.first_token_time
-            .map(|ft| ft - self.arrival_time)
+        self.first_token_time.map(|ft| ft - self.arrival_time)
     }
 
     /// Total generation latency in seconds, if available.
     pub fn total_latency(&self) -> Option<f64> {
-        self.finish_time
-            .map(|ft| ft - self.arrival_time)
+        self.finish_time.map(|ft| ft - self.arrival_time)
     }
 
     /// Tokens per second (completion tokens / generation time after first token).

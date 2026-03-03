@@ -8,9 +8,8 @@ use std::sync::LazyLock;
 use crate::reasoning_parser::ReasoningParser;
 use crate::types::ReasoningParseResult;
 
-static REASONING_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?s)<reasoning>(.*?)</reasoning>").unwrap()
-});
+static REASONING_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?s)<reasoning>(.*?)</reasoning>").unwrap());
 
 const OPEN_TAG: &str = "<reasoning>";
 const CLOSE_TAG: &str = "</reasoning>";
@@ -88,31 +87,28 @@ impl ReasoningParser for GptOssParser {
                     self.raw_buffer.clear();
                     return None;
                 }
+            } else if let Some(start_pos) = self.raw_buffer.find(OPEN_TAG) {
+                let content_part = &self.raw_buffer[..start_pos];
+                self.content_buffer.push_str(content_part);
+                self.in_reasoning = true;
+                self.raw_buffer = self.raw_buffer[start_pos + OPEN_TAG.len()..].to_string();
             } else {
-                if let Some(start_pos) = self.raw_buffer.find(OPEN_TAG) {
-                    let content_part = &self.raw_buffer[..start_pos];
-                    self.content_buffer.push_str(content_part);
-                    self.in_reasoning = true;
-                    self.raw_buffer = self.raw_buffer[start_pos + OPEN_TAG.len()..].to_string();
-                } else {
-                    let mut partial_len = 0;
-                    for i in 1..OPEN_TAG.len() {
-                        if self.raw_buffer.ends_with(&OPEN_TAG[..i]) {
-                            partial_len = i;
-                            break;
-                        }
-                    }
-                    if partial_len > 0 {
-                        let safe_end = self.raw_buffer.len() - partial_len;
-                        self.content_buffer
-                            .push_str(&self.raw_buffer[..safe_end]);
-                        self.raw_buffer = self.raw_buffer[safe_end..].to_string();
+                let mut partial_len = 0;
+                for i in 1..OPEN_TAG.len() {
+                    if self.raw_buffer.ends_with(&OPEN_TAG[..i]) {
+                        partial_len = i;
                         break;
                     }
-                    self.content_buffer.push_str(&self.raw_buffer);
-                    self.raw_buffer.clear();
+                }
+                if partial_len > 0 {
+                    let safe_end = self.raw_buffer.len() - partial_len;
+                    self.content_buffer.push_str(&self.raw_buffer[..safe_end]);
+                    self.raw_buffer = self.raw_buffer[safe_end..].to_string();
                     break;
                 }
+                self.content_buffer.push_str(&self.raw_buffer);
+                self.raw_buffer.clear();
+                break;
             }
         }
 

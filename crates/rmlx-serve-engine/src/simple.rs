@@ -20,8 +20,8 @@ use rmlx_serve_models::{load_model, LlmModel};
 use rmlx_serve_sampling::{make_logits_processors, make_sampler, top_logprobs};
 use rmlx_serve_tokenizer::{create_detokenizer, Tokenizer};
 use rmlx_serve_types::{
-    CompletionOutput, EngineConfig, FinishReason, Request, RequestMetrics,
-    RequestOutput, TokenLogprob,
+    CompletionOutput, EngineConfig, FinishReason, Request, RequestMetrics, RequestOutput,
+    TokenLogprob,
 };
 
 use crate::{Engine, EngineError, EngineHealth, EngineStats};
@@ -86,15 +86,11 @@ impl SimpleEngine {
         let tokenizer_path = config.tokenizer.as_deref().unwrap_or(&model_path);
         let tokenizer = Tokenizer::from_pretrained(tokenizer_path)?;
 
-        info!(
-            vocab_size = tokenizer.vocab_size(),
-            "tokenizer loaded"
-        );
+        info!(vocab_size = tokenizer.vocab_size(), "tokenizer loaded");
 
         // 3. Create GPU device and kernel registry.
-        let device = GpuDevice::system_default().map_err(|e| {
-            EngineError::Internal(format!("failed to acquire Metal device: {e}"))
-        })?;
+        let device = GpuDevice::system_default()
+            .map_err(|e| EngineError::Internal(format!("failed to acquire Metal device: {e}")))?;
         let queue = device.new_command_queue();
         let registry = KernelRegistry::new(device);
 
@@ -108,9 +104,8 @@ impl SimpleEngine {
         );
 
         // Re-acquire device (the first was moved into KernelRegistry::new).
-        let device = GpuDevice::system_default().map_err(|e| {
-            EngineError::Internal(format!("failed to acquire Metal device: {e}"))
-        })?;
+        let device = GpuDevice::system_default()
+            .map_err(|e| EngineError::Internal(format!("failed to acquire Metal device: {e}")))?;
 
         Ok(Self {
             model: Arc::new(tokio::sync::Mutex::new(model)),
@@ -210,7 +205,12 @@ impl Engine for SimpleEngine {
         // ── Prefill ──
         let prefill_start = Instant::now();
         let logits_array = model_guard
-            .forward(&prompt_tokens, Some(&mut cache), &self.registry, &self.queue)
+            .forward(
+                &prompt_tokens,
+                Some(&mut cache),
+                &self.registry,
+                &self.queue,
+            )
             .map_err(|e| EngineError::Model(format!("prefill failed: {e}")))?;
 
         let prefill_elapsed = prefill_start.elapsed();
@@ -393,9 +393,8 @@ impl Engine for SimpleEngine {
         let engine_start_time = self.start_time;
 
         // We need a second device handle for cache allocation.
-        let device = GpuDevice::system_default().map_err(|e| {
-            EngineError::Internal(format!("failed to acquire Metal device: {e}"))
-        })?;
+        let device = GpuDevice::system_default()
+            .map_err(|e| EngineError::Internal(format!("failed to acquire Metal device: {e}")))?;
         let queue = device.new_command_queue();
 
         // Spawn the generation loop in a background task.
@@ -415,18 +414,14 @@ impl Engine for SimpleEngine {
             let mut cache = model_guard.make_cache(device.raw());
 
             // ── Prefill ──
-            let logits_array = match model_guard.forward(
-                &prompt_tokens,
-                Some(&mut cache),
-                &registry,
-                &queue,
-            ) {
-                Ok(arr) => arr,
-                Err(e) => {
-                    warn!("prefill failed: {e}");
-                    return;
-                }
-            };
+            let logits_array =
+                match model_guard.forward(&prompt_tokens, Some(&mut cache), &registry, &queue) {
+                    Ok(arr) => arr,
+                    Err(e) => {
+                        warn!("prefill failed: {e}");
+                        return;
+                    }
+                };
 
             let mut logits_f32 = match Self::extract_logits(&logits_array) {
                 Ok(l) => l,
@@ -499,18 +494,14 @@ impl Engine for SimpleEngine {
             while finish_reason.is_none() {
                 let last_token = *generated_tokens.last().unwrap();
 
-                let logits_array = match model_guard.forward(
-                    &[last_token],
-                    Some(&mut cache),
-                    &registry,
-                    &queue,
-                ) {
-                    Ok(arr) => arr,
-                    Err(e) => {
-                        warn!("decode failed: {e}");
-                        break;
-                    }
-                };
+                let logits_array =
+                    match model_guard.forward(&[last_token], Some(&mut cache), &registry, &queue) {
+                        Ok(arr) => arr,
+                        Err(e) => {
+                            warn!("decode failed: {e}");
+                            break;
+                        }
+                    };
 
                 let mut logits_f32 = match Self::extract_logits(&logits_array) {
                     Ok(l) => l,

@@ -369,9 +369,7 @@ impl BatchGenerator {
             }
 
             // Compute top logprobs if requested.
-            let top_lps = entry
-                .logprobs_count
-                .map(|k| top_logprobs(&logits_buf, k));
+            let top_lps = entry.logprobs_count.map(|k| top_logprobs(&logits_buf, k));
 
             // Sample the first generated token.
             let first_token = (entry.sampler)(&logits_buf);
@@ -486,9 +484,7 @@ impl BatchGenerator {
                 }
 
                 // Compute top logprobs if requested.
-                let top_lps = seq_mut
-                    .logprobs_count
-                    .map(|k| top_logprobs(&logits_buf, k));
+                let top_lps = seq_mut.logprobs_count.map(|k| top_logprobs(&logits_buf, k));
 
                 // Sample next token.
                 let next_token = (seq_mut.sampler)(&logits_buf);
@@ -596,8 +592,7 @@ impl BatchGenerator {
             .iter()
             .filter(|s| s.finish_reason.is_none())
             .map(|s| {
-                let mut context =
-                    Vec::with_capacity(s.prompt_tokens.len() + s.token_ids.len());
+                let mut context = Vec::with_capacity(s.prompt_tokens.len() + s.token_ids.len());
                 context.extend_from_slice(&s.prompt_tokens);
                 context.extend_from_slice(&s.token_ids);
                 (s.uid, context)

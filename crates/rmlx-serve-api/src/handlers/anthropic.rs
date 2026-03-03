@@ -50,9 +50,11 @@ pub async fn anthropic_messages(
     let model = req.model.clone();
 
     if req.stream.unwrap_or(false) {
-        Ok(stream_anthropic_response(state, internal_request, model, prompt_tokens)
-            .await
-            .into_response())
+        Ok(
+            stream_anthropic_response(state, internal_request, model, prompt_tokens)
+                .await
+                .into_response(),
+        )
     } else {
         // Non-streaming: generate, convert via OpenAI format, then to Anthropic.
         let output = state.engine.generate(internal_request).await?;
@@ -108,9 +110,8 @@ async fn stream_anthropic_response(
     };
 
     let start_json = serde_json::to_string(&message_start).unwrap_or_default();
-    let start_event: Result<Event, Infallible> = Ok(Event::default()
-        .event("message_start")
-        .data(start_json));
+    let start_event: Result<Event, Infallible> =
+        Ok(Event::default().event("message_start").data(start_json));
 
     // Content block start.
     let block_start = serde_json::json!({
@@ -141,9 +142,7 @@ async fn stream_anthropic_response(
                     "delta": delta,
                 });
                 let json = serde_json::to_string(&delta_event).unwrap_or_default();
-                events.push(Ok(Event::default()
-                    .event("content_block_delta")
-                    .data(json)));
+                events.push(Ok(Event::default().event("content_block_delta").data(json)));
             }
             total_output_tokens += comp.token_ids.len();
         }
@@ -159,16 +158,17 @@ async fn stream_anthropic_response(
                 .data(serde_json::to_string(&block_stop).unwrap_or_default())));
 
             // Message delta with stop reason.
-            let stop_reason = output
-                .outputs
-                .first()
-                .and_then(|c| c.finish_reason)
-                .map(|r| match r {
-                    rmlx_serve_types::FinishReason::Stop => StopReason::EndTurn,
-                    rmlx_serve_types::FinishReason::Length => StopReason::MaxTokens,
-                    rmlx_serve_types::FinishReason::ToolCall => StopReason::ToolUse,
-                    rmlx_serve_types::FinishReason::Error => StopReason::EndTurn,
-                });
+            let stop_reason =
+                output
+                    .outputs
+                    .first()
+                    .and_then(|c| c.finish_reason)
+                    .map(|r| match r {
+                        rmlx_serve_types::FinishReason::Stop => StopReason::EndTurn,
+                        rmlx_serve_types::FinishReason::Length => StopReason::MaxTokens,
+                        rmlx_serve_types::FinishReason::ToolCall => StopReason::ToolUse,
+                        rmlx_serve_types::FinishReason::Error => StopReason::EndTurn,
+                    });
 
             let msg_delta = serde_json::json!({
                 "type": "message_delta",

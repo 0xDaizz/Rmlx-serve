@@ -1,12 +1,36 @@
 //! `rmlx-serve serve` subcommand -- start the HTTP API server.
 
-use crate::args::ServeArgs;
+use crate::args::{DistributedWorkerArgs, ServeArgs};
+use rmlx_serve_engine::distributed::{Communicator, Worker};
 use rmlx_serve_engine::{BatchedEngine, Engine, SimpleEngine};
 use std::sync::Arc;
-use tracing::info;
+use tracing::{info, warn};
 
 /// Run the `serve` subcommand.
 pub async fn run_serve(args: ServeArgs) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if args.distributed {
+        let ranks = args.dist_num_ranks.unwrap_or(0);
+        if ranks < 2 {
+            return Err(
+                "distributed mode requires --dist-num-ranks >= 2; current runtime path is leader-only"
+                    .into(),
+            );
+        }
+        return Err(
+            "distributed multi-rank serving is not wired into BatchedEngine yet; \
+             worker mode is available via --distributed-worker for launcher integration"
+                .into(),
+        );
+    }
+
+    if args.expert_parallel {
+        return Err(
+            "expert-parallel serving path is not yet wired into CLI runtime; \
+             remove --expert-parallel for now"
+                .into(),
+        );
+    }
+
     // -----------------------------------------------------------------------
     // 1. Build EngineConfig from CLI arguments
     // -----------------------------------------------------------------------
@@ -44,6 +68,14 @@ pub async fn run_serve(args: ServeArgs) -> Result<(), Box<dyn std::error::Error 
     info!("listen         : http://{}:{}", args.host, args.port);
     if args.api_key.is_some() {
         info!("auth           : bearer-token enabled");
+    } else if !is_loopback_host(&args.host) {
+        warn!(
+            "server is bound to non-loopback address without API key; \
+             this is unsafe for production"
+        );
+    }
+    if args.cors_allowed_origins.iter().any(|o| o == "*") {
+        warn!("CORS allows all origins (`*`); this is unsafe for production");
     }
     info!("---------------------------------------------------------");
 
@@ -67,4 +99,26 @@ pub async fn run_serve(args: ServeArgs) -> Result<(), Box<dyn std::error::Error 
     rmlx_serve_api::serve(engine, server_config).await?;
 
     Ok(())
+}
+
+/// Internal distributed worker entrypoint used by launcher-spawned processes.
+pub async fn run_distributed_worker(
+    args: DistributedWorkerArgs,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    info!(
+        rank = args.rank,
+        world_size = args.world_size,
+        backend = %args.backend,
+        model = %args.model,
+        "starting distributed worker mode"
+    );
+
+    let communicator = Communicator::new(args.rank, args.world_size);
+    let worker = Worker::new(args.rank, communicator);
+    worker.run().await?;
+    Ok(())
+}
+
+fn is_loopback_host(host: &str) -> bool {
+    matches!(host, "127.0.0.1" | "localhost" | "::1")
 }

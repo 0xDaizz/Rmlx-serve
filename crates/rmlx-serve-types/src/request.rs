@@ -343,3 +343,36 @@ pub struct TokenLogprob {
     #[serde(default)]
     pub top_logprobs: Vec<(u32, f32)>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::RequestMetrics;
+
+    #[test]
+    fn request_metrics_ttft_and_total_latency() {
+        let m = RequestMetrics {
+            arrival_time: 10.0,
+            first_token_time: Some(10.2),
+            finish_time: Some(11.0),
+            prompt_tokens: 3,
+            completion_tokens: 5,
+        };
+        let ttft = m.ttft().unwrap();
+        let total = m.total_latency().unwrap();
+        assert!((ttft - 0.2).abs() < 1e-9);
+        assert!((total - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn request_metrics_tokens_per_second() {
+        let m = RequestMetrics {
+            arrival_time: 0.0,
+            first_token_time: Some(1.0),
+            finish_time: Some(3.0),
+            prompt_tokens: 8,
+            completion_tokens: 5,
+        };
+        // (5 - 1) / (3 - 1) = 2.0 tokens/s
+        assert_eq!(m.tokens_per_second(), Some(2.0));
+    }
+}

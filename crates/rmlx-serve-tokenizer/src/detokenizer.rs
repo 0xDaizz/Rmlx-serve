@@ -545,3 +545,25 @@ pub fn detect_type(tokenizer: &Tokenizer) -> DetokenizerType {
         DetokenizerType::Naive
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::split_valid_utf8;
+
+    #[test]
+    fn split_valid_utf8_all_valid() {
+        let bytes = "hello".as_bytes();
+        let (valid_len, tail_len) = split_valid_utf8(bytes);
+        assert_eq!(valid_len, 5);
+        assert_eq!(tail_len, 0);
+    }
+
+    #[test]
+    fn split_valid_utf8_with_incomplete_multibyte_tail() {
+        let mut bytes = "a".as_bytes().to_vec();
+        bytes.push(0xE2); // start of a 3-byte UTF-8 sequence, incomplete
+        let (valid_len, tail_len) = split_valid_utf8(&bytes);
+        assert_eq!(valid_len, 1);
+        assert_eq!(tail_len, 1);
+    }
+}

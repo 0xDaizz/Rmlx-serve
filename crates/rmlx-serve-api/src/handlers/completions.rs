@@ -12,11 +12,12 @@ use axum::Json;
 use futures_util::StreamExt;
 
 use rmlx_serve_types::openai::{CompletionPrompt, CompletionRequest};
-use rmlx_serve_types::{Request, SamplingParams};
+use rmlx_serve_types::{Request, RequestId, SamplingParams};
 
 use crate::convert::{
-    apply_config_defaults, arrival_time, internal_to_completion_chunk,
-    internal_to_completion_response, strip_special_tokens, unix_timestamp,
+    apply_config_defaults, apply_stop_sequences_to_output, arrival_time,
+    internal_to_completion_chunk, internal_to_completion_response, strip_special_tokens,
+    unix_timestamp,
 };
 use crate::error::ApiError;
 use crate::sse::SSE_DONE;
@@ -41,6 +42,13 @@ pub async fn completions(
         if !(0.0..=1.0).contains(&p) {
             return Err(ApiError::InvalidRequest(format!(
                 "top_p must be between 0.0 and 1.0, got {p}"
+            )));
+        }
+    }
+    if let Some(n) = req.n {
+        if n == 0 || n > 16 {
+            return Err(ApiError::InvalidRequest(format!(
+                "n must be between 1 and 16, got {n}"
             )));
         }
     }
@@ -106,14 +114,43 @@ pub async fn completions(
     let mut internal = Request::new(token_ids, params, arrival_time());
     internal.stream = stream;
 
+    let num_completions = req.n.unwrap_or(1);
     if stream {
+        if num_completions > 1 {
+            return Err(ApiError::InvalidRequest(
+                "stream=true with n>1 is not supported by this server".to_string(),
+            ));
+        }
         // Streaming response (P0 Fix 1).
         Ok(stream_completion(state, internal, model, prompt_tokens)
             .await
             .into_response())
     } else {
-        // Non-streaming: generate and return full response.
-        let output = state.engine.generate(internal).await?;
+        // Non-streaming: generate and return full response(s).
+        let mut output = if num_completions == 1 {
+            state.engine.generate(internal.clone()).await?
+        } else {
+            let mut combined = rmlx_serve_types::RequestOutput {
+                request_id: RequestId::new(),
+                outputs: Vec::with_capacity(num_completions),
+                finished: true,
+                metrics: None,
+            };
+            for idx in 0..num_completions {
+                let mut request_i = internal.clone();
+                request_i.id = RequestId::new();
+                request_i.sampling_params.n = 1;
+                let mut out_i = state.engine.generate(request_i).await?;
+                if let Some(mut comp) = out_i.outputs.pop() {
+                    comp.index = idx;
+                    combined.outputs.push(comp);
+                }
+            }
+            combined
+        };
+
+        apply_stop_sequences_to_output(&mut output, &internal.sampling_params.stop);
+
         let created = unix_timestamp();
         let response = internal_to_completion_response(&output, &model, created, prompt_tokens);
         Ok(Json(response).into_response())

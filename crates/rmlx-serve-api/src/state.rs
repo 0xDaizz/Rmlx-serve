@@ -50,29 +50,33 @@ pub struct AppState {
 impl AppState {
     /// Create a new `AppState` wrapped in an `Arc`, ready for injection into
     /// the Axum router.
-    pub fn new(engine: Arc<dyn Engine>, config: ServerConfig) -> Arc<Self> {
-        let rate_limiter = RateLimiter::new(config.rate_limit);
-        Arc::new(Self {
-            engine,
-            config,
-            tool_parser_registry: ToolParserRegistry::new(),
-            reasoning_parser_registry: ReasoningParserRegistry::new(),
-            tool_parser_name: None,
-            reasoning_parser_name: None,
-            request_count: AtomicU64::new(0),
-            start_time: std::time::Instant::now(),
-            rate_limiter,
-            mcp_manager: None,
-        })
-    }
-
-    /// Create a new `AppState` with explicit tool/reasoning parser names.
-    pub fn with_parsers(
+    pub fn new(
         engine: Arc<dyn Engine>,
         config: ServerConfig,
-        tool_parser_name: Option<String>,
-        reasoning_parser_name: Option<String>,
+        mcp_manager: Option<Arc<McpClientManager>>,
     ) -> Arc<Self> {
+        let tool_parser_name = if config.enable_auto_tool_choice {
+            Some(
+                config
+                    .tool_call_parser
+                    .clone()
+                    .unwrap_or_else(|| "auto".to_string()),
+            )
+        } else {
+            None
+        };
+
+        let reasoning_parser_name = if config.enable_thinking {
+            Some(
+                config
+                    .reasoning_parser
+                    .clone()
+                    .unwrap_or_else(|| "think".to_string()),
+            )
+        } else {
+            None
+        };
+
         let rate_limiter = RateLimiter::new(config.rate_limit);
         Arc::new(Self {
             engine,
@@ -84,7 +88,7 @@ impl AppState {
             request_count: AtomicU64::new(0),
             start_time: std::time::Instant::now(),
             rate_limiter,
-            mcp_manager: None,
+            mcp_manager,
         })
     }
 }

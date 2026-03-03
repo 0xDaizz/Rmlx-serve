@@ -1,8 +1,8 @@
 //! Worker loop for non-leader ranks.
 //!
 //! Receives plans from the leader, executes forward passes, and returns
-//! results. Currently a stub that logs and sleeps until the distributed
-//! transport is available.
+//! results. The transport wiring is still pending, so this worker currently
+//! fails fast in multi-rank mode instead of looping forever.
 
 use tracing::{info, warn};
 
@@ -28,20 +28,22 @@ impl Worker {
 
     /// Main worker loop: receive plan -> execute -> send results.
     ///
-    /// In the current stub implementation this simply logs a warning and
-    /// sleeps in a loop until the distributed communicator is fully wired.
+    /// In the current stub implementation this fails fast for multi-rank mode
+    /// so launcher callers get an explicit error instead of a hung process.
     pub async fn run(&self) -> Result<(), DistributedError> {
         info!(rank = self.rank, "worker started, waiting for plans");
 
-        loop {
-            // In production: receive plan from leader via communicator.
-            // For now: stub that logs and yields.
+        if self.communicator.world_size() <= 1 {
             warn!(
                 rank = self.rank,
-                "distributed worker loop not yet connected to communicator"
+                "worker mode started with world_size<=1; nothing to do"
             );
-            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+            return Ok(());
         }
+
+        Err(DistributedError::Unimplemented(
+            "worker transport loop is not wired yet for multi-rank execution".to_string(),
+        ))
     }
 
     /// Return this worker's rank.

@@ -24,7 +24,7 @@ pub struct ServeArgs {
     pub tokenizer: Option<String>,
 
     /// Host address to bind the HTTP server to.
-    #[arg(long, default_value = "0.0.0.0")]
+    #[arg(long, default_value = "127.0.0.1")]
     pub host: String,
 
     /// Port to listen on.
@@ -139,6 +139,15 @@ pub struct ServeArgs {
     /// Request timeout in seconds.
     #[arg(long, default_value_t = 300.0)]
     pub timeout: f64,
+
+    /// Allowed CORS origin. Repeat to allow multiple origins.
+    /// Examples: `--cors-allow-origin http://localhost:3000`, `--cors-allow-origin *`.
+    #[arg(long = "cors-allow-origin")]
+    pub cors_allowed_origins: Vec<String>,
+
+    /// Trust `X-Forwarded-For` for client IP extraction (for trusted proxy setups).
+    #[arg(long, default_value_t = false)]
+    pub trust_x_forwarded_for: bool,
 
     // -- Speculative decoding ----------------------------------------------
     /// Speculative decoding method: "ngram", "draft", or "mtp".
@@ -261,6 +270,12 @@ impl ServeArgs {
         let enable_speculative = self.speculative_method.is_some();
 
         let enable_chunked_prefill = self.chunked_prefill_tokens > 0;
+        if enable_chunked_prefill {
+            return Err(
+                "chunked prefill is not yet implemented in batched runtime; remove --chunked-prefill-tokens"
+                    .to_string(),
+            );
+        }
         let max_prefill_chunk_size = if enable_chunked_prefill {
             self.chunked_prefill_tokens
         } else {
@@ -365,15 +380,131 @@ impl ServeArgs {
             api_key: self.api_key.clone(),
             rate_limit: self.rate_limit,
             request_timeout_secs: self.timeout as u64,
+            cors_allowed_origins: self.cors_allowed_origins.clone(),
+            trust_x_forwarded_for: self.trust_x_forwarded_for,
             max_tokens: self.max_tokens,
             default_temperature: self.default_temperature,
             default_top_p: self.default_top_p,
             mcp_config: self.mcp_config.clone(),
+            enable_auto_tool_choice: self.enable_auto_tool_choice,
+            tool_call_parser: self.tool_call_parser.clone(),
+            enable_thinking: self.enable_thinking,
+            reasoning_parser: self.reasoning_parser.clone(),
             embedding_model: self.embedding_model.clone(),
             enable_openai_api: true,
             enable_anthropic_api: true,
             enable_metrics: true,
             ..ServerConfig::default()
         }
+    }
+}
+
+/// Hidden arguments for worker processes spawned by the distributed launcher.
+#[derive(clap::Args, Debug, Clone)]
+pub struct DistributedWorkerArgs {
+    /// Rank index of this worker.
+    #[arg(long)]
+    pub rank: usize,
+
+    /// Total number of ranks.
+    #[arg(long)]
+    pub world_size: usize,
+
+    /// Distributed backend name.
+    #[arg(long, default_value = "gloo")]
+    pub backend: String,
+
+    /// Model path (forwarded by launcher).
+    #[arg(long)]
+    pub model: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn base_args() -> ServeArgs {
+        ServeArgs {
+            model: "test-model".to_string(),
+            tokenizer: None,
+            host: "127.0.0.1".to_string(),
+            port: 8000,
+            api_key: None,
+            continuous_batching: false,
+            max_num_seqs: 256,
+            max_num_batched_tokens: 8192,
+            dtype: None,
+            prefill_batch_size: 8,
+            completion_batch_size: 32,
+            stream_interval: 1,
+            chunked_prefill_tokens: 0,
+            prefix_cache_size: 100,
+            cache_memory_percent: 0.20,
+            cache_memory_mb: None,
+            no_memory_aware_cache: false,
+            kv_cache_quantization: false,
+            kv_cache_quantization_bits: 8,
+            kv_cache_quantization_group_size: 64,
+            kv_cache_min_quantize_tokens: 256,
+            use_paged_cache: false,
+            paged_cache_block_size: 64,
+            max_cache_blocks: 1000,
+            enable_prefix_caching: true,
+            max_tokens: 32768,
+            default_temperature: None,
+            default_top_p: None,
+            rate_limit: 0,
+            timeout: 300.0,
+            cors_allowed_origins: vec![],
+            trust_x_forwarded_for: false,
+            speculative_method: None,
+            spec_decode_disable_batch_size: None,
+            draft_model: None,
+            mtp_model: None,
+            spec_decode_auto_disable_threshold: 0.4,
+            spec_decode_auto_disable_window: 50,
+            num_speculative_tokens: 5,
+            enable_mtp: false,
+            mtp_num_draft_tokens: 1,
+            mtp_optimistic: false,
+            enable_auto_tool_choice: false,
+            tool_call_parser: None,
+            enable_thinking: false,
+            reasoning_parser: None,
+            mcp_config: None,
+            embedding_model: None,
+            mllm: None,
+            distributed: false,
+            dist_backend: "gloo".to_string(),
+            dist_num_ranks: None,
+            dist_hostfile: None,
+            expert_parallel: false,
+            ep_kernel_backend: None,
+        }
+    }
+
+    #[test]
+    fn chunked_prefill_is_rejected_until_implemented() {
+        let mut args = base_args();
+        args.chunked_prefill_tokens = 512;
+        let err = args.to_engine_config().unwrap_err();
+        assert!(err.contains("chunked prefill"));
+    }
+
+    #[test]
+    fn server_config_carries_tool_and_reasoning_flags() {
+        let mut args = base_args();
+        args.enable_auto_tool_choice = true;
+        args.tool_call_parser = Some("auto".to_string());
+        args.enable_thinking = true;
+        args.reasoning_parser = Some("think".to_string());
+        args.cors_allowed_origins = vec!["http://localhost:3000".to_string()];
+
+        let cfg = args.to_server_config();
+        assert!(cfg.enable_auto_tool_choice);
+        assert_eq!(cfg.tool_call_parser.as_deref(), Some("auto"));
+        assert!(cfg.enable_thinking);
+        assert_eq!(cfg.reasoning_parser.as_deref(), Some("think"));
+        assert_eq!(cfg.cors_allowed_origins.len(), 1);
     }
 }

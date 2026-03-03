@@ -653,7 +653,7 @@ pub fn finish_reason_to_string(reason: FinishReason) -> String {
         FinishReason::Stop => "stop".to_string(),
         FinishReason::Length => "length".to_string(),
         FinishReason::ToolCall => "tool_calls".to_string(),
-        FinishReason::Error => "stop".to_string(),
+        FinishReason::Error => "error".to_string(),
     }
 }
 
@@ -672,6 +672,40 @@ pub fn strip_special_tokens(text: &str) -> String {
         result = result.replace(token, "");
     }
     result
+}
+
+/// Return `(truncated_text, matched)` after applying stop-sequence truncation.
+pub fn truncate_at_stop_sequences(text: &str, stop: &[String]) -> (String, bool) {
+    let mut earliest: Option<usize> = None;
+    for s in stop {
+        if s.is_empty() {
+            continue;
+        }
+        if let Some(idx) = text.find(s) {
+            earliest = Some(earliest.map_or(idx, |cur| cur.min(idx)));
+        }
+    }
+
+    if let Some(idx) = earliest {
+        (text[..idx].to_string(), true)
+    } else {
+        (text.to_string(), false)
+    }
+}
+
+/// Truncate completion texts at configured stop sequences and adjust finish reasons.
+pub fn apply_stop_sequences_to_output(output: &mut RequestOutput, stop: &[String]) {
+    if stop.is_empty() {
+        return;
+    }
+
+    for comp in &mut output.outputs {
+        let (truncated, matched) = truncate_at_stop_sequences(&comp.text, stop);
+        if matched {
+            comp.text = truncated;
+            comp.finish_reason = Some(FinishReason::Stop);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -705,5 +739,47 @@ pub fn delta_tool_call_to_openai(dtc: &rmlx_serve_tools::types::DeltaToolCall) -
         } else {
             None
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rmlx_serve_types::{CompletionOutput, RequestId, RequestOutput};
+
+    #[test]
+    fn truncate_uses_earliest_stop_sequence() {
+        let text = "hello<stop>world END";
+        let stop = vec!["END".to_string(), "<stop>".to_string()];
+        let (truncated, matched) = truncate_at_stop_sequences(text, &stop);
+        assert!(matched);
+        assert_eq!(truncated, "hello");
+    }
+
+    #[test]
+    fn apply_stop_sequences_marks_finish_reason() {
+        let mut out = RequestOutput {
+            request_id: RequestId::new(),
+            outputs: vec![CompletionOutput {
+                index: 0,
+                text: "abc STOP trailing".to_string(),
+                token_ids: vec![1, 2, 3],
+                finish_reason: None,
+                logprobs: vec![],
+            }],
+            finished: true,
+            metrics: None,
+        };
+
+        apply_stop_sequences_to_output(&mut out, &["STOP".to_string()]);
+        assert_eq!(out.outputs[0].text, "abc ");
+        assert_eq!(out.outputs[0].finish_reason, Some(FinishReason::Stop));
+    }
+
+    #[test]
+    fn resolve_param_prefers_request_then_config_then_fallback() {
+        assert_eq!(resolve_param(Some(1), Some(2), 3), 1);
+        assert_eq!(resolve_param(None, Some(2), 3), 2);
+        assert_eq!(resolve_param::<i32>(None, None, 3), 3);
     }
 }

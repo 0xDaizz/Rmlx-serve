@@ -38,10 +38,14 @@ pub use error::ApiError;
 pub use router::create_router;
 pub use state::AppState;
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use rmlx_serve_engine::Engine;
 use rmlx_serve_types::config::ServerConfig;
+
+use crate::mcp::config::McpConfig;
+use crate::mcp::manager::McpClientManager;
 
 /// Start the HTTP API server.
 ///
@@ -49,16 +53,29 @@ use rmlx_serve_types::config::ServerConfig;
 /// the Axum router with all routes and middleware, binds to the configured
 /// host:port, and serves requests until the process is shut down.
 pub async fn serve(engine: Arc<dyn Engine>, config: ServerConfig) -> Result<(), ApiError> {
-    let state = AppState::new(engine, config.clone());
+    let mcp_manager = if let Some(mcp_cfg) = McpConfig::load(config.mcp_config.as_deref())
+        .map_err(|e| ApiError::InternalError(format!("failed to load MCP config: {e}")))?
+    {
+        Some(Arc::new(McpClientManager::new(&mcp_cfg).await.map_err(
+            |e| ApiError::InternalError(format!("failed to initialize MCP: {e}")),
+        )?))
+    } else {
+        None
+    };
+
+    let state = AppState::new(engine, config.clone(), mcp_manager);
     let app = create_router(state);
 
     let addr = format!("{}:{}", config.host, config.port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     tracing::info!("rmlx-serve listening on {}", addr);
 
-    axum::serve(listener, app)
-        .await
-        .map_err(|e| ApiError::InternalError(format!("server error: {e}")))?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .map_err(|e| ApiError::InternalError(format!("server error: {e}")))?;
 
     Ok(())
 }

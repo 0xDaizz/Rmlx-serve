@@ -329,6 +329,10 @@ pub struct ServerConfig {
     #[serde(default)]
     pub cors_allowed_origins: Vec<String>,
 
+    /// Whether to trust `X-Forwarded-For` when deriving client IP.
+    /// Keep this disabled unless running behind a trusted reverse proxy.
+    pub trust_x_forwarded_for: bool,
+
     /// Optional API key for authentication. `None` = no auth.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
@@ -371,6 +375,20 @@ pub struct ServerConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mcp_config: Option<String>,
 
+    /// Enable automatic tool-call detection in model outputs.
+    pub enable_auto_tool_choice: bool,
+
+    /// Tool-call parser name (for example: `"auto"`, `"hermes"`, `"llama"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_parser: Option<String>,
+
+    /// Enable reasoning/thinking extraction in model outputs.
+    pub enable_thinking: bool,
+
+    /// Reasoning parser name (for example: `"think"`, `"deepseek_r1"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_parser: Option<String>,
+
     /// Optional embedding model path or repo id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub embedding_model: Option<String>,
@@ -379,11 +397,12 @@ pub struct ServerConfig {
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
-            host: "0.0.0.0".to_string(),
+            host: "127.0.0.1".to_string(),
             port: 8000,
             max_connections: 1024,
             request_timeout_secs: 300,
             cors_allowed_origins: Vec::new(),
+            trust_x_forwarded_for: false,
             api_key: None,
             enable_openai_api: true,
             enable_anthropic_api: false,
@@ -396,6 +415,10 @@ impl Default for ServerConfig {
             default_temperature: None,
             default_top_p: None,
             mcp_config: None,
+            enable_auto_tool_choice: false,
+            tool_call_parser: None,
+            enable_thinking: false,
+            reasoning_parser: None,
             embedding_model: None,
         }
     }

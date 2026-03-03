@@ -122,19 +122,25 @@ pub async fn rate_limit_middleware(
 ) -> Result<Response, ApiError> {
     if state.config.rate_limit > 0 {
         // Try to extract the client IP from ConnectInfo, falling back to
-        // X-Forwarded-For, then to a default.
-        let client_ip = request
+        // optionally trusting X-Forwarded-For only when explicitly enabled.
+        let connect_ip = request
             .extensions()
             .get::<ConnectInfo<std::net::SocketAddr>>()
-            .map(|ci| ci.0.ip())
-            .or_else(|| {
-                request
-                    .headers()
-                    .get("x-forwarded-for")
-                    .and_then(|v| v.to_str().ok())
-                    .and_then(|s| s.split(',').next())
-                    .and_then(|s| s.trim().parse::<IpAddr>().ok())
-            })
+            .map(|ci| ci.0.ip());
+
+        let forwarded_ip = if state.config.trust_x_forwarded_for {
+            request
+                .headers()
+                .get("x-forwarded-for")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.split(',').next())
+                .and_then(|s| s.trim().parse::<IpAddr>().ok())
+        } else {
+            None
+        };
+
+        let client_ip = connect_ip
+            .or(forwarded_ip)
             .unwrap_or(IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
 
         if !state.rate_limiter.check(client_ip) {

@@ -40,6 +40,10 @@ enum Commands {
 
     /// Benchmark inference throughput and latency.
     Bench(bench::BenchArgs),
+
+    /// Internal worker mode for distributed launcher.
+    #[command(hide = true)]
+    DistributedWorker(args::DistributedWorkerArgs),
 }
 
 // ---------------------------------------------------------------------------
@@ -76,5 +80,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         Commands::Serve(args) => serve::run_serve(*args).await,
         Commands::Generate(args) => generate::run_generate(args).await,
         Commands::Bench(args) => bench::run_bench(args).await,
+        Commands::DistributedWorker(args) => serve::run_distributed_worker(args).await,
     }
 }

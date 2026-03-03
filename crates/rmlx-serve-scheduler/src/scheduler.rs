@@ -377,7 +377,7 @@ impl Scheduler {
     /// The request is validated, and a sampler and logits processors are
     /// created from its sampling parameters. The request is then placed
     /// in the waiting queue.
-    pub fn add_request(&mut self, request: Request) {
+    pub fn add_request(&mut self, request: Request) -> Result<(), SchedulerError> {
         let prompt_len = request.prompt_token_ids.len();
 
         // Validate prompt length.
@@ -388,7 +388,10 @@ impl Scheduler {
                 max = self.config.max_prompt_len,
                 "request rejected: prompt too long"
             );
-            return;
+            return Err(SchedulerError::InvalidRequest(format!(
+                "prompt too long: {} > max_prompt_len {}",
+                prompt_len, self.config.max_prompt_len
+            )));
         }
 
         if prompt_len == 0 {
@@ -396,7 +399,9 @@ impl Scheduler {
                 request_id = %request.id,
                 "request rejected: empty prompt"
             );
-            return;
+            return Err(SchedulerError::InvalidRequest(
+                "prompt must not be empty".to_string(),
+            ));
         }
 
         // Build sampler and logits processors from sampling params.
@@ -415,6 +420,7 @@ impl Scheduler {
             sampler,
             logits_processors,
         });
+        Ok(())
     }
 
     /// Abort a request by its ID.

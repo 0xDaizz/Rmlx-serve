@@ -63,7 +63,7 @@ impl DistributedLauncher {
                 tokio::process::Command::new("ssh")
                     .arg(host)
                     .arg(exe.to_string_lossy().as_ref())
-                    .arg("--distributed-worker")
+                    .arg("distributed-worker")
                     .arg("--rank")
                     .arg(rank.to_string())
                     .arg("--world-size")
@@ -86,7 +86,7 @@ impl DistributedLauncher {
                 info!(rank, "launching local worker process");
 
                 tokio::process::Command::new(&exe)
-                    .arg("--distributed-worker")
+                    .arg("distributed-worker")
                     .arg("--rank")
                     .arg(rank.to_string())
                     .arg("--world-size")

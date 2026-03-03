@@ -34,7 +34,8 @@ use rmlx_serve_models::{load_model, LlmModel};
 use rmlx_serve_scheduler::Scheduler;
 use rmlx_serve_tokenizer::{create_detokenizer, StreamingDetokenizer, Tokenizer};
 use rmlx_serve_types::{
-    CompletionOutput, EngineConfig, Request, RequestId, RequestMetrics, RequestOutput, TokenLogprob,
+    CompletionOutput, EngineConfig, FinishReason, Request, RequestId, RequestMetrics,
+    RequestOutput, TokenLogprob,
 };
 
 use crate::{Engine, EngineError, EngineHealth, EngineStats};
@@ -135,7 +136,12 @@ impl BatchedEngine {
 
         let device2 = GpuDevice::system_default()
             .map_err(|e| EngineError::Internal(format!("failed to acquire Metal device: {e}")))?;
-        let scheduler = Scheduler::new(config.scheduler.clone(), model.as_ref(), device2.raw());
+        let scheduler = Scheduler::with_engine_config(
+            config.scheduler.clone(),
+            model.as_ref(),
+            &config,
+            device2.raw(),
+        );
         info!(
             max_num_seqs = config.scheduler.max_num_seqs,
             max_model_len = config.scheduler.max_model_len,
@@ -487,6 +493,23 @@ fn handle_new_request(
 
     debug!(request_id = %request_id, prompt_tokens, max_tokens = request.sampling_params.max_tokens, "new request submitted to engine");
 
+    if let Err(err) = scheduler.add_request(request) {
+        let _ = response_tx.send(RequestOutput {
+            request_id,
+            outputs: vec![CompletionOutput {
+                index: 0,
+                text: String::new(),
+                token_ids: Vec::new(),
+                finish_reason: Some(FinishReason::Error),
+                logprobs: Vec::new(),
+            }],
+            finished: true,
+            metrics: None,
+        });
+        warn!(request_id = %request_id, error = %err, "request rejected before scheduling");
+        return;
+    }
+
     let detokenizer = create_detokenizer(tokenizer);
     request_states.insert(
         request_id,
@@ -504,7 +527,6 @@ fn handle_new_request(
             tokens_since_emit: 0,
         },
     );
-    scheduler.add_request(request);
 }
 
 fn handle_abort(

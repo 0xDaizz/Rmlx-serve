@@ -12,10 +12,11 @@ use axum::Json;
 use futures_util::StreamExt;
 
 use rmlx_serve_types::openai::{ChatCompletionRequest, ChatContent, ChatMessage, ChatRole};
+use rmlx_serve_types::RequestId;
 
 use crate::convert::{
-    apply_config_defaults, chat_messages_to_template, chat_request_to_internal,
-    delta_tool_call_to_openai, final_usage_chunk, internal_to_chat_chunk,
+    apply_config_defaults, apply_stop_sequences_to_output, chat_messages_to_template,
+    chat_request_to_internal, delta_tool_call_to_openai, final_usage_chunk, internal_to_chat_chunk,
     internal_to_chat_response, strip_special_tokens, unix_timestamp, validate_chat_request,
 };
 use crate::error::ApiError;
@@ -76,7 +77,13 @@ pub async fn chat_completions(
         .is_some_and(|opts| opts.include_usage);
 
     // 4. Streaming vs non-streaming.
+    let num_completions = req.n.unwrap_or(1);
     if req.stream.unwrap_or(false) {
+        if num_completions > 1 {
+            return Err(ApiError::InvalidRequest(
+                "stream=true with n>1 is not supported by this server".to_string(),
+            ));
+        }
         Ok(stream_chat_completion(
             state,
             internal_request,
@@ -89,8 +96,31 @@ pub async fn chat_completions(
         .await
         .into_response())
     } else {
-        // Non-streaming: generate and return full response.
-        let output = state.engine.generate(internal_request).await?;
+        // Non-streaming: generate one or more completions.
+        let mut output = if num_completions == 1 {
+            state.engine.generate(internal_request.clone()).await?
+        } else {
+            let mut combined = rmlx_serve_types::RequestOutput {
+                request_id: RequestId::new(),
+                outputs: Vec::with_capacity(num_completions),
+                finished: true,
+                metrics: None,
+            };
+
+            for idx in 0..num_completions {
+                let mut request_i = internal_request.clone();
+                request_i.id = RequestId::new();
+                request_i.sampling_params.n = 1;
+                let mut out_i = state.engine.generate(request_i).await?;
+                if let Some(mut comp) = out_i.outputs.pop() {
+                    comp.index = idx;
+                    combined.outputs.push(comp);
+                }
+            }
+            combined
+        };
+
+        apply_stop_sequences_to_output(&mut output, &internal_request.sampling_params.stop);
 
         // Apply tool-call parsing to each output.
         let tool_results = tool_parser_name.as_deref().and_then(|name| {

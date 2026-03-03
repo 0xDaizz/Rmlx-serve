@@ -264,6 +264,27 @@ pub fn load_model(path: impl AsRef<Path>) -> Result<(TransformerModel, ModelConf
     // 5. Sanitize weights
     weights = sanitize::sanitize_weights(weights, &config.model_type);
 
+    // 5b. Ensure tied word embeddings are handled.
+    //     sanitize_weights already ties lm_head.weight -> embed_tokens.weight when
+    //     lm_head.weight is absent, but we double-check here using the explicit
+    //     config flag for models that set tie_word_embeddings = true.
+    if config.tie_word_embeddings == Some(true) && !weights.contains_key("lm_head.weight") {
+        let tied = weights
+            .get("model.embed_tokens.weight")
+            .map(|embed_weight| {
+                let shape = embed_weight.shape().to_vec();
+                let strides = embed_weight.strides().to_vec();
+                let offset = embed_weight.offset();
+                embed_weight.view(shape, strides, offset)
+            });
+        if let Some(tied_array) = tied {
+            info!("tie_word_embeddings=true: tying lm_head.weight to embed_tokens.weight");
+            weights.insert("lm_head.weight".to_string(), tied_array);
+        } else {
+            warn!("tie_word_embeddings=true but neither lm_head.weight nor embed_tokens.weight found");
+        }
+    }
+
     // 6. Map and assemble
     let mapper = mapper::create_weight_mapper(&config.model_type);
     let model = assemble_model(weights, &transformer_config, mapper.as_ref(), device)?;

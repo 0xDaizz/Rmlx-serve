@@ -8,9 +8,28 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
+use rmlx_core::DType;
 use rmlx_nn::{FeedForwardType, MoeConfig, TransformerConfig};
 
 use crate::error::{Result, WeightError};
+
+/// Convert a PyTorch dtype string (from HuggingFace config.json) to an RMLX DType.
+///
+/// Handles common aliases used in HuggingFace model configs. Returns `None` for
+/// types that have no RMLX equivalent (e.g., integer types not supported on the
+/// Metal compute backend).
+pub fn torch_dtype_to_rmlx(dtype_str: &str) -> Option<DType> {
+    match dtype_str {
+        "float16" | "fp16" => Some(DType::Float16),
+        "bfloat16" | "bf16" => Some(DType::Bfloat16),
+        "float32" | "fp32" | "float" => Some(DType::Float32),
+        // Integer types: rmlx-core currently only exposes UInt32.
+        // Int8, UInt8, Int16, UInt16, and Int32 are not available as DType variants
+        // in rmlx-core's Metal-backed array system.
+        "uint32" | "u32" => Some(DType::UInt32),
+        _ => None,
+    }
+}
 
 /// Quantization configuration embedded in config.json (AWQ, GPTQ, etc.).
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -100,6 +119,11 @@ pub struct ModelConfig {
     /// PyTorch dtype string (e.g., "float16", "bfloat16").
     #[serde(default)]
     pub torch_dtype: Option<String>,
+
+    /// Whether the model uses attention bias (q/k/v projections).
+    /// Some models like Qwen2 use bias, while Llama/Mistral don't.
+    #[serde(default)]
+    pub attention_bias: Option<bool>,
 }
 
 impl ModelConfig {
@@ -145,6 +169,15 @@ impl ModelConfig {
             return 0;
         }
         hidden / heads
+    }
+
+    /// Get the model's preferred DType based on `torch_dtype` from config.json.
+    ///
+    /// Returns `None` if `torch_dtype` is not set or maps to an unsupported type.
+    pub fn dtype(&self) -> Option<DType> {
+        self.torch_dtype
+            .as_deref()
+            .and_then(torch_dtype_to_rmlx)
     }
 
     /// Convert this HuggingFace config into the RMLX TransformerConfig.

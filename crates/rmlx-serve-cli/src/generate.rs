@@ -1,5 +1,6 @@
 //! `rmlx-serve generate` subcommand -- one-shot text generation.
 
+use rmlx_serve_engine::generate_text;
 use rmlx_serve_types::SamplingParams;
 use tracing::info;
 
@@ -58,77 +59,33 @@ pub async fn run_generate(args: GenerateArgs) -> Result<(), Box<dyn std::error::
     }
 
     // -----------------------------------------------------------------------
-    // 2. Create engine and run generation
+    // 2. Run generation via the convenience function
     // -----------------------------------------------------------------------
-    //
-    // When `rmlx_serve_engine::generate_text` is implemented:
-    //
-    //   let response = rmlx_serve_engine::generate_text(
-    //       &args.model,
-    //       &args.prompt,
-    //       sampling_params,
-    //   ).await?;
-    //
-    // For now we run through the Engine trait via StubEngine.
-
-    let engine_config = rmlx_serve_types::config::EngineConfig {
-        model: args.model.clone(),
-        ..rmlx_serve_types::config::EngineConfig::default()
-    };
-
-    let engine = crate::stub_engine::StubEngine::new(engine_config);
-
     let start = tokio::time::Instant::now();
 
-    // Build a Request from the prompt.
-    let prompt_token_ids = rmlx_serve_engine::Engine::encode(&engine, &args.prompt)?;
-    let prompt_len = prompt_token_ids.len();
-
-    let request = rmlx_serve_types::Request::new(
-        prompt_token_ids,
-        sampling_params,
-        start.elapsed().as_secs_f64(),
-    );
-
-    let output = rmlx_serve_engine::Engine::generate(&engine, request).await?;
+    let response = generate_text(&args.model, &args.prompt, sampling_params).await?;
 
     let elapsed = start.elapsed();
 
     // -----------------------------------------------------------------------
     // 3. Print result
     // -----------------------------------------------------------------------
-    if let Some(completion) = output.outputs.first() {
-        println!("{}", completion.text);
+    println!("{}", response.text);
 
-        if args.verbose {
-            let gen_tokens = completion.token_ids.len();
-            let total_secs = elapsed.as_secs_f64();
-            let tps = if total_secs > 0.0 {
-                gen_tokens as f64 / total_secs
-            } else {
-                0.0
-            };
+    if args.verbose {
+        let total_secs = elapsed.as_secs_f64();
 
-            eprintln!();
-            eprintln!("--- statistics ---");
-            eprintln!("prompt tokens  : {}", prompt_len);
-            eprintln!("gen tokens     : {}", gen_tokens);
-            eprintln!("total time     : {:.3}s", total_secs);
-            eprintln!("throughput     : {:.1} tok/s", tps);
-            if let Some(ref metrics) = output.metrics {
-                if let Some(ttft) = metrics.ttft() {
-                    eprintln!("ttft           : {:.3}s", ttft);
-                }
-                if let Some(lat) = metrics.total_latency() {
-                    eprintln!("e2e latency    : {:.3}s", lat);
-                }
-                if let Some(rate) = metrics.tokens_per_second() {
-                    eprintln!("decode tok/s   : {:.1}", rate);
-                }
-            }
+        eprintln!();
+        eprintln!("--- statistics ---");
+        eprintln!("prompt tokens  : {}", response.prompt_tokens);
+        eprintln!("gen tokens     : {}", response.generation_tokens);
+        eprintln!("total time     : {:.3}s", total_secs);
+        eprintln!("prompt tok/s   : {:.1}", response.prompt_tps);
+        eprintln!("gen tok/s      : {:.1}", response.generation_tps);
+        eprintln!("finish reason  : {:?}", response.finish_reason);
+        if response.peak_memory_mb > 0.0 {
+            eprintln!("peak memory    : {:.1} MB", response.peak_memory_mb);
         }
-    } else {
-        eprintln!("warning: engine returned no completions");
     }
 
     Ok(())

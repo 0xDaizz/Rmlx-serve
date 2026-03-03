@@ -86,13 +86,18 @@ pub fn unpack_awq_weights(packed: &[u8], bits: usize, _group_size: usize) -> Vec
             packed[offset + 3],
         ]);
 
+        #[allow(clippy::needless_range_loop)]
         for j in 0..elements_per_u32 {
-            let shift = j * bits;
+            // AWQ uses interleaved bit packing order for 4-bit quantization
+            let shift = if bits == 4 {
+                const AWQ_4BIT_ORDER: [usize; 8] = [0, 16, 4, 20, 8, 24, 12, 28];
+                AWQ_4BIT_ORDER[j]
+            } else {
+                j * bits
+            };
             let val = (packed_val >> shift) & mask;
-            // Convert to signed value centered around zero
-            let half = 1u32 << (bits - 1);
-            let signed = val as i32 - half as i32;
-            result.push(signed as f32);
+            // AWQ weights are unsigned; the zero-point tensor handles centering
+            result.push(val as f32);
         }
     }
 
@@ -132,10 +137,15 @@ pub fn transform_gptq_weights(packed: &[u8], bits: usize, _group_size: usize) ->
             packed[offset + 3],
         ]);
 
-        // GPTQ uses a different bit extraction order than AWQ:
-        // bits are packed from LSB to MSB within each u32.
+        // GPTQ also uses interleaved bit packing order for 4-bit quantization
+        #[allow(clippy::needless_range_loop)]
         for j in 0..elements_per_u32 {
-            let shift = j * bits;
+            let shift = if bits == 4 {
+                const GPTQ_4BIT_ORDER: [usize; 8] = [0, 16, 4, 20, 8, 24, 12, 28];
+                GPTQ_4BIT_ORDER[j]
+            } else {
+                j * bits
+            };
             let val = (packed_val >> shift) & mask;
             result.push(val as f32);
         }
@@ -209,13 +219,23 @@ pub fn apply_quantization(
             continue;
         }
 
+        // Determine the unpacked shape: the qweight shape's column count expands
+        // by the packing ratio (32 / bits).
+        let qw_shape = qweight.shape().to_vec();
+        let packing_ratio = 32 / bits;
+        let (rows, cols) = if qw_shape.len() == 2 {
+            (qw_shape[0], qw_shape[1] * packing_ratio)
+        } else {
+            (1, unpacked.len())
+        };
+
         // Apply scales and zeros if available
         let dequantized = if let (Some(scales), Some(zeros)) =
             (weights.get(&scales_name), weights.get(&zeros_name))
         {
             let scales_f32: Vec<f32> = read_as_f32(scales);
             let zeros_f32: Vec<f32> = read_as_f32(zeros);
-            apply_scales_and_zeros(&unpacked, &scales_f32, &zeros_f32, group_size)
+            apply_scales_and_zeros(&unpacked, &scales_f32, &zeros_f32, group_size, cols)
         } else if let Some(scales) = weights.get(&scales_name) {
             let scales_f32: Vec<f32> = read_as_f32(scales);
             apply_scales_only(&unpacked, &scales_f32, group_size)
@@ -223,22 +243,28 @@ pub fn apply_quantization(
             unpacked
         };
 
-        // Determine the output shape: the qweight shape's column count expands
-        // by the packing ratio (32 / bits).
-        let qw_shape = qweight.shape().to_vec();
-        let packing_ratio = 32 / bits;
-        let out_shape = if qw_shape.len() == 2 {
-            vec![qw_shape[0], qw_shape[1] * packing_ratio]
+        // For AWQ, transpose from [rows, cols] to [cols, rows]
+        let (out_shape, final_data) = if method == "awq" && qw_shape.len() == 2 {
+            let mut transposed = vec![0.0f32; rows * cols];
+            for r in 0..rows {
+                for c in 0..cols {
+                    transposed[c * rows + r] = dequantized[r * cols + c];
+                }
+            }
+            (vec![cols, rows], transposed)
         } else {
-            vec![dequantized.len()]
-        };
-
-        // Create the dequantized array
-        let numel: usize = out_shape.iter().product();
-        let final_data = if dequantized.len() > numel {
-            dequantized[..numel].to_vec()
-        } else {
-            dequantized
+            let out_shape = if qw_shape.len() == 2 {
+                vec![rows, cols]
+            } else {
+                vec![dequantized.len()]
+            };
+            let numel: usize = out_shape.iter().product();
+            let data = if dequantized.len() > numel {
+                dequantized[..numel].to_vec()
+            } else {
+                dequantized
+            };
+            (out_shape, data)
         };
 
         // Replace the weight name (remove .qweight, add .weight)
@@ -317,17 +343,25 @@ fn bf16_to_f32(bits: u16) -> f32 {
 }
 
 /// Apply per-group scales and zero-points to unpacked weights.
+///
+/// Scales and zeros are 2D tensors with shape `[num_groups, out_features]`.
+/// `num_cols` is the number of columns in the unpacked weight matrix (out_features).
 fn apply_scales_and_zeros(
     unpacked: &[f32],
     scales: &[f32],
     zeros: &[f32],
     group_size: usize,
+    num_cols: usize,
 ) -> Vec<f32> {
     let mut result = Vec::with_capacity(unpacked.len());
     for (i, &val) in unpacked.iter().enumerate() {
-        let group = i / group_size;
-        let scale = scales.get(group).copied().unwrap_or(1.0);
-        let zero = zeros.get(group).copied().unwrap_or(0.0);
+        let row = i / num_cols;
+        let col = i % num_cols;
+        let group_row = row / group_size;
+        // scales/zeros layout: [num_groups, num_cols] => index = group_row * num_cols + col
+        let scale_idx = group_row * num_cols + col;
+        let scale = scales.get(scale_idx).copied().unwrap_or(1.0);
+        let zero = zeros.get(scale_idx).copied().unwrap_or(0.0);
         result.push((val - zero) * scale);
     }
     result
@@ -369,6 +403,7 @@ mod tests {
             rope_scaling: None,
             architectures: None,
             torch_dtype: None,
+            attention_bias: None,
         };
         assert_eq!(detect_quantization(&config), QuantMethod::None);
     }
@@ -398,18 +433,41 @@ mod tests {
             rope_scaling: None,
             architectures: None,
             torch_dtype: None,
+            attention_bias: None,
         };
         assert_eq!(detect_quantization(&config), QuantMethod::AWQ);
     }
 
     #[test]
     fn test_unpack_awq_4bit() {
-        // Pack two 4-bit values (3 and 5) into a single u32
-        // After centering around zero (subtract 2^3 = 8): 3-8=-5, 5-8=-3, ...
-        let packed_val: u32 = 0x53; // 0101 0011 in binary: values 3, 5
+        // Test AWQ interleaved 4-bit unpacking.
+        // AWQ 4-bit order: shifts [0, 16, 4, 20, 8, 24, 12, 28]
+        // Pack known values into a u32 at the interleaved positions.
+        // Place value 3 at bits[0..4], value 5 at bits[16..20],
+        // value 7 at bits[4..8], value 9 at bits[20..24],
+        // value 1 at bits[8..12], value 2 at bits[24..28],
+        // value 4 at bits[12..16], value 6 at bits[28..32]
+        let packed_val: u32 = (3 << 0)
+            | (7 << 4)
+            | (1 << 8)
+            | (4 << 12)
+            | (5 << 16)
+            | (9 << 20)
+            | (2 << 24)
+            | (6 << 28);
         let packed = packed_val.to_le_bytes().to_vec();
         let result = unpack_awq_weights(&packed, 4, 128);
         assert_eq!(result.len(), 8); // 32/4 = 8 values per u32
+        // Values extracted in interleaved order: shifts [0,16,4,20,8,24,12,28]
+        // Unsigned (no sign centering)
+        assert_eq!(result[0], 3.0); // shift 0
+        assert_eq!(result[1], 5.0); // shift 16
+        assert_eq!(result[2], 7.0); // shift 4
+        assert_eq!(result[3], 9.0); // shift 20
+        assert_eq!(result[4], 1.0); // shift 8
+        assert_eq!(result[5], 2.0); // shift 24
+        assert_eq!(result[6], 4.0); // shift 12
+        assert_eq!(result[7], 6.0); // shift 28
     }
 
     #[test]

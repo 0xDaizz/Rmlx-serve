@@ -58,6 +58,16 @@ pub enum RequestStatus {
     Running,
     /// Generation complete.
     Finished,
+    /// Preempted by the scheduler (e.g. to free KV-cache for higher-priority
+    /// requests). The request may be rescheduled later.
+    Preempted,
+    /// Finished because a stop token or stop string was matched.
+    FinishedStopped,
+    /// Finished because the maximum token limit was reached.
+    FinishedLengthCapped,
+    /// Finished because the client disconnected or an unrecoverable error
+    /// occurred.
+    FinishedAborted,
 }
 
 // ---------------------------------------------------------------------------

@@ -47,6 +47,6 @@ pub mod sampler;
 
 // Re-export the main public API at crate root.
 pub use error::SamplingError;
-pub use pipeline::{make_logits_processors, make_sampler};
+pub use pipeline::{make_logits_processors, make_sampler, SamplerFn};
 pub use processors::LogitsProcessor;
 pub use sampler::{categorical, greedy, log_softmax, softmax, top_logprobs};

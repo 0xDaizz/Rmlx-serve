@@ -275,6 +275,19 @@ pub struct ChatCompletionRequest {
     /// Number of top log-probs to return per token.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub top_logprobs: Option<usize>,
+
+    /// Options for streaming responses (e.g., include usage in final chunk).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stream_options: Option<StreamOptions>,
+}
+
+/// Options controlling streaming behavior.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct StreamOptions {
+    /// When `true`, the final streaming chunk includes a `usage` field with
+    /// prompt/completion/total token counts.
+    #[serde(default)]
+    pub include_usage: bool,
 }
 
 /// Stop condition can be a single string or an array of strings.

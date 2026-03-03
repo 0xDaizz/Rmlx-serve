@@ -184,7 +184,7 @@ impl RejectionSampler {
             };
 
             // Acceptance probability: min(1, p_target / p_draft).
-            let accept_prob = if p_draft > 0.0 {
+            let accept_prob = if p_draft > 1e-10 {
                 (p_target / p_draft).min(1.0)
             } else if p_target > 0.0 {
                 // Draft assigned zero probability but target didn't -- always accept.

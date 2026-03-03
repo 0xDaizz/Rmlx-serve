@@ -76,10 +76,7 @@ pub struct McpClient {
 
 impl McpClient {
     /// Spawn a new MCP server process and return a client connected to it.
-    pub async fn new(
-        server_name: &str,
-        config: &McpServerConfig,
-    ) -> Result<Self, McpClientError> {
+    pub async fn new(server_name: &str, config: &McpServerConfig) -> Result<Self, McpClientError> {
         // Validate command against security rules.
         let security = McpSecurity::permissive();
         if !security.is_command_allowed(&config.command) {
@@ -125,10 +122,7 @@ impl McpClient {
             .stderr(Stdio::piped());
 
         let mut child = cmd.spawn().map_err(|e| {
-            McpClientError::SpawnFailed(format!(
-                "failed to spawn {:?}: {}",
-                self.config.command, e
-            ))
+            McpClientError::SpawnFailed(format!("failed to spawn {:?}: {}", self.config.command, e))
         })?;
 
         let stdout = child
@@ -179,10 +173,9 @@ impl McpClient {
             .cloned()
             .unwrap_or(Value::Array(vec![]));
 
-        let raw_tools: Vec<RawMcpTool> =
-            serde_json::from_value(tools_value).map_err(|e| {
-                McpClientError::Protocol(format!("failed to parse tools/list response: {}", e))
-            })?;
+        let raw_tools: Vec<RawMcpTool> = serde_json::from_value(tools_value).map_err(|e| {
+            McpClientError::Protocol(format!("failed to parse tools/list response: {}", e))
+        })?;
 
         let tools = raw_tools
             .into_iter()
@@ -210,9 +203,8 @@ impl McpClient {
 
         let response = self.send_request("tools/call", Some(params)).await?;
 
-        response.ok_or_else(|| {
-            McpClientError::Protocol("tools/call returned no result".to_string())
-        })
+        response
+            .ok_or_else(|| McpClientError::Protocol("tools/call returned no result".to_string()))
     }
 
     /// Check whether the server process is still alive.
@@ -220,7 +212,7 @@ impl McpClient {
         let mut guard = self.child.lock().await;
         if let Some(ref mut child) = *guard {
             match child.try_wait() {
-                Ok(None) => true,  // still running
+                Ok(None) => true,     // still running
                 Ok(Some(_)) => false, // exited
                 Err(_) => false,
             }
@@ -273,26 +265,23 @@ impl McpClient {
             params,
         };
 
-        let mut payload =
-            serde_json::to_string(&request).map_err(|e| {
-                McpClientError::Protocol(format!("failed to serialize request: {}", e))
-            })?;
+        let mut payload = serde_json::to_string(&request)
+            .map_err(|e| McpClientError::Protocol(format!("failed to serialize request: {}", e)))?;
         payload.push('\n');
 
         // Write to stdin.
         {
             let mut guard = self.child.lock().await;
-            let child = guard
-                .as_mut()
-                .ok_or_else(|| McpClientError::Protocol("server process not running".to_string()))?;
+            let child = guard.as_mut().ok_or_else(|| {
+                McpClientError::Protocol("server process not running".to_string())
+            })?;
             let stdin = child
                 .stdin
                 .as_mut()
                 .ok_or_else(|| McpClientError::Protocol("stdin not available".to_string()))?;
-            stdin
-                .write_all(payload.as_bytes())
-                .await
-                .map_err(|e| McpClientError::Protocol(format!("failed to write to stdin: {}", e)))?;
+            stdin.write_all(payload.as_bytes()).await.map_err(|e| {
+                McpClientError::Protocol(format!("failed to write to stdin: {}", e))
+            })?;
             stdin
                 .flush()
                 .await
@@ -342,14 +331,12 @@ impl McpClient {
             .stdin
             .as_mut()
             .ok_or_else(|| McpClientError::Protocol("stdin not available".to_string()))?;
-        stdin
-            .write_all(payload.as_bytes())
-            .await
-            .map_err(|e| McpClientError::Protocol(format!("failed to write notification: {}", e)))?;
-        stdin
-            .flush()
-            .await
-            .map_err(|e| McpClientError::Protocol(format!("failed to flush notification: {}", e)))?;
+        stdin.write_all(payload.as_bytes()).await.map_err(|e| {
+            McpClientError::Protocol(format!("failed to write notification: {}", e))
+        })?;
+        stdin.flush().await.map_err(|e| {
+            McpClientError::Protocol(format!("failed to flush notification: {}", e))
+        })?;
 
         Ok(())
     }
@@ -357,9 +344,9 @@ impl McpClient {
     /// Read a single JSON-RPC response line from the server's stdout.
     async fn read_response(&self) -> Result<JsonRpcResponse, McpClientError> {
         let mut guard = self.stdout_reader.lock().await;
-        let reader = guard.as_mut().ok_or_else(|| {
-            McpClientError::Protocol("stdout reader not available".to_string())
-        })?;
+        let reader = guard
+            .as_mut()
+            .ok_or_else(|| McpClientError::Protocol("stdout reader not available".to_string()))?;
 
         let mut line = String::new();
         loop {

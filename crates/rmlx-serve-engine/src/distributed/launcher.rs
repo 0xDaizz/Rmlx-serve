@@ -32,10 +32,7 @@ impl DistributedLauncher {
     ///
     /// Returns a `Vec<Child>` with handles to all spawned worker processes
     /// (rank 0 is assumed to run in the current process and is **not** spawned).
-    pub async fn launch(
-        &self,
-        model_path: &str,
-    ) -> Result<Vec<Child>, DistributedError> {
+    pub async fn launch(&self, model_path: &str) -> Result<Vec<Child>, DistributedError> {
         if self.num_ranks <= 1 {
             info!("single-rank launch; no workers to spawn");
             return Ok(Vec::new());
@@ -112,10 +109,7 @@ impl DistributedLauncher {
             children.push(child);
         }
 
-        info!(
-            spawned = children.len(),
-            "all worker processes launched"
-        );
+        info!(spawned = children.len(), "all worker processes launched");
 
         Ok(children)
     }

@@ -49,12 +49,10 @@ impl McpConfig {
         for path in &candidates {
             if path.exists() {
                 tracing::info!("Loading MCP config from {}", path.display());
-                let contents = std::fs::read_to_string(path).map_err(|e| {
-                    McpConfigError::Io(format!("{}: {}", path.display(), e))
-                })?;
-                let config: McpConfig = serde_json::from_str(&contents).map_err(|e| {
-                    McpConfigError::Parse(format!("{}: {}", path.display(), e))
-                })?;
+                let contents = std::fs::read_to_string(path)
+                    .map_err(|e| McpConfigError::Io(format!("{}: {}", path.display(), e)))?;
+                let config: McpConfig = serde_json::from_str(&contents)
+                    .map_err(|e| McpConfigError::Parse(format!("{}: {}", path.display(), e)))?;
                 return Ok(Some(config));
             }
         }
@@ -91,19 +89,16 @@ impl McpConfig {
 
 /// Resolve the user's home directory.
 fn dirs_home() -> Option<PathBuf> {
-    std::env::var("HOME")
-        .ok()
-        .map(PathBuf::from)
-        .or({
-            #[cfg(target_os = "windows")]
-            {
-                std::env::var("USERPROFILE").ok().map(PathBuf::from)
-            }
-            #[cfg(not(target_os = "windows"))]
-            {
-                None
-            }
-        })
+    std::env::var("HOME").ok().map(PathBuf::from).or({
+        #[cfg(target_os = "windows")]
+        {
+            std::env::var("USERPROFILE").ok().map(PathBuf::from)
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            None
+        }
+    })
 }
 
 /// Errors that can occur while loading MCP configuration.

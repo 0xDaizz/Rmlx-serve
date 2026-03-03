@@ -111,11 +111,8 @@ impl EPAdapter {
     ///
     /// The expert partition is computed via round-robin assignment.
     pub fn new(config: EPConfig) -> Self {
-        let partition = ExpertPartition::round_robin(
-            config.total_experts,
-            config.num_ranks,
-            config.rank,
-        );
+        let partition =
+            ExpertPartition::round_robin(config.total_experts, config.num_ranks, config.rank);
 
         info!(
             rank = config.rank,
@@ -144,16 +141,9 @@ impl EPAdapter {
     ///
     /// Returns a [`DispatchResult`] containing only the tokens assigned to
     /// this rank, plus metadata for reassembly in [`combine_exchange`].
-    pub fn dispatch_exchange(
-        &self,
-        tokens: &[f32],
-        expert_indices: &[usize],
-    ) -> DispatchResult {
+    pub fn dispatch_exchange(&self, tokens: &[f32], expert_indices: &[usize]) -> DispatchResult {
         let num_tokens = expert_indices.len();
-        assert!(
-            num_tokens > 0,
-            "dispatch_exchange called with zero tokens"
-        );
+        assert!(num_tokens > 0, "dispatch_exchange called with zero tokens");
 
         let token_dim = tokens.len() / num_tokens;
         assert_eq!(
@@ -271,11 +261,7 @@ impl EPAdapter {
             );
         }
 
-        debug!(
-            rank = my_rank,
-            num_tokens,
-            "combine complete"
-        );
+        debug!(rank = my_rank, num_tokens, "combine complete");
 
         output
     }

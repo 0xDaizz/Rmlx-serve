@@ -47,3 +47,11 @@ pub use tool_parser::{ToolCallParser, ToolParserRegistry};
 pub use types::{
     DeltaToolCall, ParsedToolCall, ReasoningParseResult, StreamingParseResult, ToolCallParseResult,
 };
+
+/// Strip `<think>...</think>` and `<|begin_of_thought|>...<|end_of_thought|>`
+/// blocks from model output, returning the cleaned text.
+///
+/// This is a convenience re-export of the internal utility.
+pub fn strip_think_tags(text: &str) -> String {
+    parsers::utils::strip_think_tags(text)
+}

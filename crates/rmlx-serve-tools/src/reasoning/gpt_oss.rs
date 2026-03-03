@@ -8,8 +8,9 @@ use std::sync::LazyLock;
 use crate::reasoning_parser::ReasoningParser;
 use crate::types::ReasoningParseResult;
 
-static REASONING_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?s)<reasoning>(.*?)</reasoning>").unwrap());
+static REASONING_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?s)<reasoning>(.*?)</reasoning>").unwrap()
+});
 
 const OPEN_TAG: &str = "<reasoning>";
 const CLOSE_TAG: &str = "</reasoning>";
@@ -102,7 +103,8 @@ impl ReasoningParser for GptOssParser {
                 }
                 if partial_len > 0 {
                     let safe_end = self.raw_buffer.len() - partial_len;
-                    self.content_buffer.push_str(&self.raw_buffer[..safe_end]);
+                    self.content_buffer
+                        .push_str(&self.raw_buffer[..safe_end]);
                     self.raw_buffer = self.raw_buffer[safe_end..].to_string();
                     break;
                 }

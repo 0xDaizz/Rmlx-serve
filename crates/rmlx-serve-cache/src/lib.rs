@@ -17,6 +17,7 @@
 //! Prompt cache save/load utilities are provided via the [`prompt_cache`] module.
 
 pub mod batch_cache;
+pub mod cache_ops;
 pub mod error;
 pub mod kv_cache;
 pub mod memory;
@@ -38,4 +39,5 @@ pub use prompt_cache::{
     trim_prompt_cache,
 };
 pub use quantized_cache::QuantizedKVCache;
+pub use cache_ops::{make_causal_mask, CacheOps};
 pub use rotating_cache::RotatingKVCache;

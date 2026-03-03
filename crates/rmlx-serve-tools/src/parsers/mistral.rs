@@ -26,7 +26,9 @@ fn generate_mistral_tool_call_id() -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos() as u64;
-    let mixed = count.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(nanos);
+    let mixed = count
+        .wrapping_mul(6_364_136_223_846_793_005)
+        .wrapping_add(nanos);
 
     // Generate a 9-character alphanumeric string
     const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
@@ -278,8 +280,7 @@ mod tests {
     #[test]
     fn test_auto_generated_id_format() {
         let parser = MistralToolParser::new();
-        let text =
-            r#"[TOOL_CALLS] [{"name": "get_weather", "arguments": {"city": "London"}}]"#;
+        let text = r#"[TOOL_CALLS] [{"name": "get_weather", "arguments": {"city": "London"}}]"#;
         let result = parser.parse(text);
         assert_eq!(result.tool_calls.len(), 1);
         // Auto-generated ID should be 9 chars alphanumeric

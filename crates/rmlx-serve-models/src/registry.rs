@@ -179,8 +179,7 @@ fn load_transformer_model(model_path: &Path, device: GpuDevice) -> Result<Box<dy
         "loaded transformer model"
     );
 
-    let llm =
-        TransformerLlm::with_rope_scaling(model, transformer_config, device, rope_scaling)?;
+    let llm = TransformerLlm::with_rope_scaling(model, transformer_config, device, rope_scaling)?;
     Ok(Box::new(llm))
 }
 

@@ -56,9 +56,7 @@ pub async fn mcp_list_tools(
 /// Handle `GET /v1/mcp/servers`.
 ///
 /// Returns the list of connected MCP servers and their status.
-pub async fn mcp_list_servers(
-    State(_state): State<Arc<AppState>>,
-) -> Json<Vec<MCPServerStatus>> {
+pub async fn mcp_list_servers(State(_state): State<Arc<AppState>>) -> Json<Vec<MCPServerStatus>> {
     Json(vec![])
 }
 
@@ -69,9 +67,10 @@ pub async fn mcp_execute_tool(
     State(state): State<Arc<AppState>>,
     Json(request): Json<McpExecuteRequest>,
 ) -> Result<Json<McpExecuteResponse>, ApiError> {
-    let manager = state.mcp_manager.as_ref().ok_or_else(|| {
-        ApiError::InvalidRequest("MCP is not configured".to_string())
-    })?;
+    let manager = state
+        .mcp_manager
+        .as_ref()
+        .ok_or_else(|| ApiError::InvalidRequest("MCP is not configured".to_string()))?;
 
     let result = manager
         .execute(&request.server, &request.tool, request.arguments)

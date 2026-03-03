@@ -231,7 +231,8 @@ impl LlmModel for TransformerLlm {
 
                 // Extract last token logits from the final chunk's output
                 let logits = last_logits.expect("at least one chunk must be processed");
-                let final_chunk_len = seq_len - (seq_len / self.prefill_chunk_size) * self.prefill_chunk_size;
+                let final_chunk_len =
+                    seq_len - (seq_len / self.prefill_chunk_size) * self.prefill_chunk_size;
                 let final_chunk_len = if final_chunk_len == 0 {
                     self.prefill_chunk_size
                 } else {

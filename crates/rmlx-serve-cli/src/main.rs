@@ -6,10 +6,10 @@
 //! - **`generate`** -- one-shot text generation from the command line.
 //! - **`bench`** -- benchmark inference throughput and latency.
 
+pub mod args;
 mod bench;
 mod generate;
 mod serve;
-pub(crate) mod stub_engine;
 
 use clap::Parser;
 use tracing_subscriber::EnvFilter;
@@ -33,7 +33,7 @@ struct Cli {
 #[derive(clap::Subcommand, Debug)]
 enum Commands {
     /// Start the HTTP API server (OpenAI + Anthropic compatible).
-    Serve(serve::ServeArgs),
+    Serve(Box<args::ServeArgs>),
 
     /// Run one-shot text generation from the command line.
     Generate(generate::GenerateArgs),
@@ -71,7 +71,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Serve(args) => serve::run_serve(args).await,
+        Commands::Serve(args) => serve::run_serve(*args).await,
         Commands::Generate(args) => generate::run_generate(args).await,
         Commands::Bench(args) => bench::run_bench(args).await,
     }

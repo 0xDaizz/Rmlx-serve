@@ -5,14 +5,14 @@
 //! Each call to `step()` prefills new sequences (up to limits) then
 //! decodes one token for all active sequences.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 
 use tracing::{debug, trace, warn};
 
 use rmlx_core::{Array, DType, KernelRegistry};
 use rmlx_serve_cache::{BatchKVCache, KVCache};
 use rmlx_serve_models::LlmModel;
-use rmlx_serve_sampling::{top_logprobs, LogitsProcessor};
+use rmlx_serve_sampling::{top_logprobs, LogitsProcessor, SamplerFn};
 use rmlx_serve_types::FinishReason;
 
 use crate::batch::{Batch, SequenceId, SequenceState};
@@ -119,7 +119,7 @@ struct PrefillEntry {
     cache: KVCache,
 
     /// The sampler closure.
-    sampler: Box<dyn Fn(&[f32]) -> u32 + Send>,
+    sampler: SamplerFn,
 
     /// Context-dependent logits processors.
     logits_processors: Vec<Box<dyn LogitsProcessor>>,
@@ -167,6 +167,14 @@ pub struct BatchGenerator {
 
     /// When the generator was created (for throughput calculations).
     start_time: std::time::Instant,
+
+    /// Direct mapping from sequence ID to its cache slot index in BatchKVCache.
+    /// This replaces the fragile positional mapping that broke when sequences
+    /// were removed or reordered.
+    cache_slot_map: HashMap<SequenceId, usize>,
+
+    /// Free cache slot indices available for reuse (returned when sequences finish).
+    free_cache_slots: Vec<usize>,
 }
 
 impl BatchGenerator {
@@ -179,6 +187,8 @@ impl BatchGenerator {
             next_uid: 0,
             stats: BatchStats::default(),
             start_time: std::time::Instant::now(),
+            cache_slot_map: HashMap::new(),
+            free_cache_slots: Vec::new(),
         }
     }
 
@@ -187,12 +197,13 @@ impl BatchGenerator {
     /// Each call provides parallel vectors of prompt tokens, generation limits,
     /// pre-allocated KV caches, samplers, logits processors, and logprobs counts.
     /// Returns the assigned sequence ids.
+    #[allow(clippy::too_many_arguments)]
     pub fn insert(
         &mut self,
         prompts: Vec<Vec<u32>>,
         max_tokens: Vec<usize>,
         caches: Vec<KVCache>,
-        samplers: Vec<Box<dyn Fn(&[f32]) -> u32 + Send>>,
+        samplers: Vec<SamplerFn>,
         logits_processors: Vec<Vec<Box<dyn LogitsProcessor>>>,
         logprobs_counts: Vec<Option<usize>>,
         stop_token_ids: Vec<Vec<u32>>,
@@ -266,8 +277,11 @@ impl BatchGenerator {
 
             // Check decode batch -- we can't recover the cache directly from
             // the batch (it's in BatchKVCache managed by the scheduler), so
-            // just remove the sequence state.
+            // just remove the sequence state. Also free the cache slot.
             if self.decode_batch.remove(uid).is_some() {
+                if let Some(slot) = self.cache_slot_map.remove(&uid) {
+                    self.free_cache_slots.push(slot);
+                }
                 results.push(None);
             } else {
                 results.push(None);
@@ -298,6 +312,15 @@ impl BatchGenerator {
 
         // ── Phase 1: Prefill ──
         // Admit sequences from the prefill queue up to batch limits.
+        // TODO(batched-prefill): Currently each sequence is prefilled with its
+        // own individual forward call because the model `forward()` API takes a
+        // single cache (`Option<&mut Vec<LayerKvCache>>`). To batch multiple
+        // prefill sequences into a single forward call we would need:
+        //   1. A batched model forward API that accepts multiple token sequences
+        //      with per-sequence caches (or a unified paged KV cache).
+        //   2. Padding / attention-mask support so variable-length prompts can
+        //      be packed into one [batch, max_seq_len] tensor.
+        // Until that API exists, prefills are processed serially per-sequence.
         let available_slots = self
             .config
             .completion_batch_size
@@ -318,7 +341,10 @@ impl BatchGenerator {
             trace!(uid, prompt_len, "prefilling sequence");
 
             // Find a free slot in the batch cache for this sequence.
-            let batch_idx = self.find_free_cache_slot(batch_cache);
+            let batch_idx = self.allocate_cache_slot(batch_cache);
+
+            // Record the uid -> slot mapping.
+            self.cache_slot_map.insert(uid, batch_idx);
 
             // Insert the KV cache into the batch cache.
             batch_cache.insert(batch_idx, entry.cache);
@@ -334,7 +360,9 @@ impl BatchGenerator {
             // Extract logits as f32 on CPU. The model returns [1, vocab_size].
             let logits_f32 = self.extract_logits(&logits_array)?;
 
-            // Apply logits processors.
+            // Apply logits processors with the full context (prompt tokens).
+            // At prefill time the context is just the prompt since no tokens
+            // have been generated yet.
             let mut logits_buf = logits_f32;
             for proc in &entry.logits_processors {
                 proc.process(&mut logits_buf, &entry.prompt_tokens);
@@ -360,8 +388,10 @@ impl BatchGenerator {
             };
 
             // Create sequence state and add to decode batch.
+            // Store prompt_tokens so logits processors get full context later.
             let state = SequenceState {
                 uid,
+                prompt_tokens: entry.prompt_tokens,
                 token_ids: vec![first_token],
                 current_token: first_token,
                 max_tokens: entry.max_tokens,
@@ -391,6 +421,15 @@ impl BatchGenerator {
         // ── Phase 2: Decode ──
         // Process all active sequences that were NOT just prefilled and are
         // not finished.
+        // TODO(batched-decode): Currently each decode sequence gets its own
+        // individual forward call because the model `forward()` API takes a
+        // single cache (`Option<&mut Vec<LayerKvCache>>`). To batch multiple
+        // decode sequences into a single forward call we would need:
+        //   1. A batched model forward API that accepts a batch of single-token
+        //      inputs with per-sequence caches (or a unified paged KV cache).
+        //   2. The ability to gather per-sequence logits from the batched output
+        //      tensor (shape [batch_size, vocab_size]).
+        // Until that API exists, decodes are processed serially per-sequence.
         let decode_uids: Vec<SequenceId> = self
             .decode_batch
             .iter()
@@ -399,8 +438,6 @@ impl BatchGenerator {
             .collect();
 
         if !decode_uids.is_empty() {
-            // For each active decode sequence, run model forward with its
-            // current token and its cache.
             for &uid in &decode_uids {
                 // Find the sequence in the batch.
                 let seq = match self.decode_batch.iter().find(|s| s.uid == uid) {
@@ -410,74 +447,82 @@ impl BatchGenerator {
 
                 let current_token = seq.current_token;
 
-                // Find its cache slot in the batch cache. The slot index
-                // matches the position we assigned during prefill. We search
-                // for a cache that has the right sequence length.
-                let batch_idx = self.find_cache_slot_for_uid(uid, batch_cache);
-
-                if let Some(idx) = batch_idx {
-                    let cache_slot = batch_cache.get_mut(idx);
-                    let cache_layers = cache_slot.map(|c| &mut c.inner);
-
-                    let logits_array = model
-                        .forward(&[current_token], cache_layers, registry, queue)
-                        .map_err(|e| SchedulerError::ModelError(e.to_string()))?;
-
-                    let logits_f32 = self.extract_logits(&logits_array)?;
-
-                    // Get the mutable sequence state to apply processors.
-                    let seq_mut = match self.decode_batch.iter_mut().find(|s| s.uid == uid) {
-                        Some(s) => s,
-                        None => continue,
-                    };
-
-                    // Apply logits processors with context of generated tokens.
-                    let mut logits_buf = logits_f32;
-                    for proc in &seq_mut.logits_processors {
-                        proc.process(&mut logits_buf, &seq_mut.token_ids);
+                // Look up the cache slot directly from our HashMap.
+                let batch_idx = match self.cache_slot_map.get(&uid) {
+                    Some(&idx) => idx,
+                    None => {
+                        warn!(uid, "no cache slot mapping found for decode sequence");
+                        continue;
                     }
+                };
 
-                    // Compute top logprobs if requested.
-                    let top_lps = seq_mut
-                        .logprobs_count
-                        .map(|k| top_logprobs(&logits_buf, k));
+                let cache_slot = batch_cache.get_mut(batch_idx);
+                let cache_layers = cache_slot.map(|c| &mut c.inner);
 
-                    // Sample next token.
-                    let next_token = (seq_mut.sampler)(&logits_buf);
+                let logits_array = model
+                    .forward(&[current_token], cache_layers, registry, queue)
+                    .map_err(|e| SchedulerError::ModelError(e.to_string()))?;
 
-                    // Update sequence state.
-                    seq_mut.token_ids.push(next_token);
-                    seq_mut.current_token = next_token;
-                    seq_mut.num_generated += 1;
+                let logits_f32 = self.extract_logits(&logits_array)?;
 
-                    // Check stop conditions.
-                    let is_stop_token = seq_mut.stop_token_ids.contains(&next_token);
-                    let hit_max = seq_mut.num_generated >= seq_mut.max_tokens;
+                // Get the mutable sequence state to apply processors.
+                let seq_mut = match self.decode_batch.iter_mut().find(|s| s.uid == uid) {
+                    Some(s) => s,
+                    None => continue,
+                };
 
-                    let finish = if is_stop_token {
-                        Some(FinishReason::Stop)
-                    } else if hit_max {
-                        Some(FinishReason::Length)
-                    } else {
-                        None
-                    };
+                // Apply logits processors with the complete context:
+                // prompt tokens + all generated tokens so far. This is
+                // critical for repetition penalty and frequency/presence
+                // penalty processors that need to see the full history.
+                let mut full_context =
+                    Vec::with_capacity(seq_mut.prompt_tokens.len() + seq_mut.token_ids.len());
+                full_context.extend_from_slice(&seq_mut.prompt_tokens);
+                full_context.extend_from_slice(&seq_mut.token_ids);
 
-                    if finish.is_some() {
-                        seq_mut.finish_reason = finish;
-                    }
-
-                    responses.push(BatchResponse {
-                        uid,
-                        token: next_token,
-                        text: None,
-                        logprobs: top_lps,
-                        finish_reason: finish,
-                    });
-
-                    self.stats.generation_tokens += 1;
-                } else {
-                    warn!(uid, "no cache slot found for decode sequence");
+                let mut logits_buf = logits_f32;
+                for proc in &seq_mut.logits_processors {
+                    proc.process(&mut logits_buf, &full_context);
                 }
+
+                // Compute top logprobs if requested.
+                let top_lps = seq_mut
+                    .logprobs_count
+                    .map(|k| top_logprobs(&logits_buf, k));
+
+                // Sample next token.
+                let next_token = (seq_mut.sampler)(&logits_buf);
+
+                // Update sequence state.
+                seq_mut.token_ids.push(next_token);
+                seq_mut.current_token = next_token;
+                seq_mut.num_generated += 1;
+
+                // Check stop conditions.
+                let is_stop_token = seq_mut.stop_token_ids.contains(&next_token);
+                let hit_max = seq_mut.num_generated >= seq_mut.max_tokens;
+
+                let finish = if is_stop_token {
+                    Some(FinishReason::Stop)
+                } else if hit_max {
+                    Some(FinishReason::Length)
+                } else {
+                    None
+                };
+
+                if finish.is_some() {
+                    seq_mut.finish_reason = finish;
+                }
+
+                responses.push(BatchResponse {
+                    uid,
+                    token: next_token,
+                    text: None,
+                    logprobs: top_lps,
+                    finish_reason: finish,
+                });
+
+                self.stats.generation_tokens += 1;
             }
         }
 
@@ -490,6 +535,15 @@ impl BatchGenerator {
             .collect();
 
         if !finished_uids.is_empty() {
+            // Free cache slots for finished sequences and remove from the
+            // batch cache so the slots can be reused.
+            for &uid in &finished_uids {
+                if let Some(slot) = self.cache_slot_map.remove(&uid) {
+                    batch_cache.remove(slot);
+                    self.free_cache_slots.push(slot);
+                }
+            }
+
             let keep: Vec<bool> = self
                 .decode_batch
                 .iter()
@@ -533,6 +587,22 @@ impl BatchGenerator {
     /// Whether there is no pending or active work.
     pub fn is_idle(&self) -> bool {
         self.prefill_queue.is_empty() && self.decode_batch.is_empty()
+    }
+
+    /// Return context tokens (prompt + generated) for each active decode
+    /// sequence. Used by the scheduler for speculative decoding proposals.
+    pub fn active_sequences_context(&self) -> Vec<(SequenceId, Vec<u32>)> {
+        self.decode_batch
+            .iter()
+            .filter(|s| s.finish_reason.is_none())
+            .map(|s| {
+                let mut context =
+                    Vec::with_capacity(s.prompt_tokens.len() + s.token_ids.len());
+                context.extend_from_slice(&s.prompt_tokens);
+                context.extend_from_slice(&s.token_ids);
+                (s.uid, context)
+            })
+            .collect()
     }
 
     // ── Internal helpers ──
@@ -581,52 +651,26 @@ impl BatchGenerator {
         }
     }
 
-    /// Find a free slot in the batch cache for a new sequence.
-    fn find_free_cache_slot(&self, batch_cache: &BatchKVCache) -> usize {
+    /// Allocate a cache slot for a new sequence.
+    ///
+    /// Prefers reusing freed slots from finished sequences. If no freed
+    /// slots are available, scans the batch cache for an empty slot.
+    fn allocate_cache_slot(&mut self, batch_cache: &BatchKVCache) -> usize {
+        // Reuse a previously freed slot if available.
+        if let Some(slot) = self.free_cache_slots.pop() {
+            return slot;
+        }
+
+        // Otherwise scan for the first empty slot.
         for idx in 0..batch_cache.capacity() {
             if batch_cache.get(idx).is_none() {
                 return idx;
             }
         }
-        // If no free slot, return the next index after active count.
+
+        // Fallback: use the next index after active count.
         // The caller should have ensured capacity.
         batch_cache.active_count()
-    }
-
-    /// Find the cache slot for a given sequence uid.
-    ///
-    /// Since we track uid-to-slot mapping implicitly via batch ordering,
-    /// we search the decode batch for the sequence's position and map
-    /// it to the corresponding batch cache slot. This uses a linear scan
-    /// which is acceptable for typical batch sizes (< 256).
-    fn find_cache_slot_for_uid(
-        &self,
-        uid: SequenceId,
-        batch_cache: &BatchKVCache,
-    ) -> Option<usize> {
-        // The slot index corresponds to the sequence's position in the
-        // batch at the time it was added. We iterate active cache slots
-        // and match by position in the decode batch.
-        //
-        // Since sequences may have been removed (creating gaps), we need
-        // a more robust approach: we maintain that the uid at decode_batch
-        // position i corresponds to batch_cache slot i (after compaction).
-        // For simplicity, we map the position in the batch to the i-th
-        // active cache slot.
-        let pos = self.decode_batch.iter().position(|s| s.uid == uid)?;
-
-        // Find the pos-th active slot in the batch cache.
-        let mut count = 0;
-        for idx in 0..batch_cache.capacity() {
-            if batch_cache.get(idx).is_some() {
-                if count == pos {
-                    return Some(idx);
-                }
-                count += 1;
-            }
-        }
-
-        None
     }
 }
 

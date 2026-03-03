@@ -126,6 +126,7 @@ impl SpecDecodeRuntime {
         target_probs_fn: &dyn Fn(&[u32]) -> Vec<Vec<f32>>,
     ) -> Result<Vec<u32>, SpecError> {
         // Check if we should re-enable for a probe attempt.
+        let is_probe = !self.enabled;
         if !self.enabled {
             if self.config.probe_interval > 0 {
                 self.steps_since_probe += 1;
@@ -207,6 +208,28 @@ impl SpecDecodeRuntime {
             );
             self.enabled = false;
             self.steps_since_probe = 0;
+        }
+
+        // Step 6: After a probe, check if acceptance rate warrants reactivation.
+        if is_probe {
+            let probe_rate = self.metrics.windowed_acceptance_rate();
+            if self.config.auto_disable_threshold > 0.0
+                && probe_rate >= self.config.auto_disable_threshold as f64
+            {
+                info!(
+                    probe_rate = format!("{:.2}", probe_rate),
+                    threshold = self.config.auto_disable_threshold,
+                    "probe succeeded: re-enabling speculative decoding"
+                );
+                self.enabled = true;
+                self.steps_since_probe = 0;
+            } else {
+                debug!(
+                    probe_rate = format!("{:.2}", probe_rate),
+                    threshold = self.config.auto_disable_threshold,
+                    "probe failed: keeping speculative decoding disabled"
+                );
+            }
         }
 
         // Build the final output: accepted tokens + bonus token.

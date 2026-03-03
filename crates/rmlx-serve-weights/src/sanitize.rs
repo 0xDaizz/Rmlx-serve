@@ -61,11 +61,12 @@ pub fn sanitize_weights(
     }
 
     // 3. Remove bias tensors for models known to be bias-free
-    //    Most modern LLMs (Llama, Mistral, Qwen2, etc.) don't use bias in
-    //    linear layers. Removing them prevents shape-mismatch errors.
+    //    Most modern LLMs (Llama, Mistral, etc.) don't use bias in linear layers.
+    //    Note: Qwen2 has attention bias and is intentionally excluded from this list.
+    //    Removing bias tensors prevents shape-mismatch errors.
     let bias_free_models = [
         "llama", "llama2", "llama3", "codellama", "mistral", "mixtral",
-        "qwen2", "deepseek", "deepseek_v2", "deepseek_v3",
+        "deepseek", "deepseek_v2", "deepseek_v3",
     ];
 
     let model_type_lower = model_type.to_lowercase();
@@ -123,9 +124,8 @@ fn sanitize_mixtral(weights: &mut HashMap<String, Array>) {
 
 /// DeepSeek-specific sanitization.
 fn sanitize_deepseek(weights: &mut HashMap<String, Array>) {
-    // DeepSeek V2/V3 may have extra tensors for MLA (Multi-head Latent Attention)
-    // that are not used in the standard forward path. Remove them if present.
-    let extra_keys: Vec<String> = weights
+    // DeepSeek V2/V3 MLA weights - keep them, they're needed for MLA attention
+    let mla_keys: Vec<String> = weights
         .keys()
         .filter(|k| {
             k.contains("kv_a_proj_with_mqa")
@@ -135,12 +135,8 @@ fn sanitize_deepseek(weights: &mut HashMap<String, Array>) {
         })
         .cloned()
         .collect();
-    for key in &extra_keys {
-        trace!(
-            key = key.as_str(),
-            "removing DeepSeek MLA tensor (not supported in standard path)"
-        );
-        weights.remove(key);
+    if !mla_keys.is_empty() {
+        debug!(count = mla_keys.len(), "DeepSeek MLA weights detected, keeping for MLA attention");
     }
 }
 
@@ -159,10 +155,11 @@ mod tests {
     fn test_bias_free_model_detection() {
         let bias_free = [
             "llama", "llama2", "llama3", "codellama", "mistral", "mixtral",
-            "qwen2", "deepseek", "deepseek_v2", "deepseek_v3",
+            "deepseek", "deepseek_v2", "deepseek_v3",
         ];
         assert!(bias_free.contains(&"llama"));
-        assert!(bias_free.contains(&"qwen2"));
+        // Qwen2 has attention bias, so it should NOT be in the bias-free list
+        assert!(!bias_free.contains(&"qwen2"));
         assert!(!bias_free.contains(&"gpt2"));
     }
 }

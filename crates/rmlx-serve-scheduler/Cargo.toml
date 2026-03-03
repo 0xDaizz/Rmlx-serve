@@ -10,6 +10,7 @@ rmlx-serve-types.workspace = true
 rmlx-serve-cache.workspace = true
 rmlx-serve-models.workspace = true
 rmlx-serve-sampling.workspace = true
+rmlx-serve-speculative.workspace = true
 rmlx-core.workspace = true
 rmlx-nn.workspace = true
 rmlx-metal.workspace = true

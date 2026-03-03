@@ -2,7 +2,7 @@
 //!
 //! Each processor mutates a logit slice in-place before sampling.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use rand::Rng;
 
@@ -152,6 +152,20 @@ impl LogitsProcessor for TopPProcessor {
 /// `p * max_prob`.
 pub struct MinPProcessor {
     pub p: f32,
+    /// The minimum number of tokens that must survive filtering regardless of
+    /// the probability threshold. Defaults to 1.
+    pub min_tokens_to_keep: usize,
+}
+
+impl MinPProcessor {
+    /// Creates a new `MinPProcessor` with the given probability threshold and
+    /// a default `min_tokens_to_keep` of 1.
+    pub fn new(p: f32) -> Self {
+        Self {
+            p,
+            min_tokens_to_keep: 1,
+        }
+    }
 }
 
 impl LogitsProcessor for MinPProcessor {
@@ -169,8 +183,33 @@ impl LogitsProcessor for MinPProcessor {
 
         let threshold = self.p * max_prob;
 
+        // Count how many tokens are above the threshold.
+        let count_above = probs.iter().filter(|&&p| p >= threshold).count();
+
+        // If fewer tokens survive than `min_tokens_to_keep`, skip filtering
+        // entirely so that at least that many tokens remain.
+        if count_above < self.min_tokens_to_keep {
+            return;
+        }
+
+        // Build a list of (index, prob) sorted by descending probability so we
+        // can identify the top-N tokens to protect.
+        let mut indexed: Vec<(usize, f32)> =
+            probs.iter().enumerate().map(|(i, &p)| (i, p)).collect();
+        indexed.sort_unstable_by(|a, b| {
+            b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        // Collect the indices of the top `min_tokens_to_keep` tokens that must
+        // never be filtered out.
+        let keep_set: HashSet<usize> = indexed
+            .iter()
+            .take(self.min_tokens_to_keep)
+            .map(|&(i, _)| i)
+            .collect();
+
         for (i, l) in logits.iter_mut().enumerate() {
-            if probs[i] < threshold {
+            if probs[i] < threshold && !keep_set.contains(&i) {
                 *l = f32::NEG_INFINITY;
             }
         }
@@ -297,6 +336,8 @@ impl LogitsProcessor for LogitBiasProcessor {
 pub struct XtcProcessor {
     pub probability: f32,
     pub threshold: f32,
+    /// Token ids that should never be masked by XTC (e.g. EOS, newline tokens).
+    pub excluded_token_ids: HashSet<u32>,
 }
 
 impl LogitsProcessor for XtcProcessor {
@@ -314,11 +355,12 @@ impl LogitsProcessor for XtcProcessor {
 
         let probs = softmax(logits);
 
-        // Find tokens above the threshold.
+        // Find tokens above the threshold, excluding special tokens (EOS,
+        // newline, etc.) which should never be masked by XTC.
         let above_threshold: Vec<(usize, f32)> = probs
             .iter()
             .enumerate()
-            .filter(|(_, &p)| p >= self.threshold)
+            .filter(|(i, &p)| p >= self.threshold && !self.excluded_token_ids.contains(&(*i as u32)))
             .map(|(i, &p)| (i, p))
             .collect();
 
@@ -383,7 +425,7 @@ mod tests {
     #[test]
     fn test_min_p() {
         let mut logits = vec![10.0f32, 1.0, 0.0, -10.0];
-        let proc = MinPProcessor { p: 0.1 };
+        let proc = MinPProcessor::new(0.1);
         proc.process(&mut logits, &[]);
         // Token 0 is max prob; tokens with prob < 0.1 * max_prob should be masked.
         assert!(logits[0] > f32::NEG_INFINITY);

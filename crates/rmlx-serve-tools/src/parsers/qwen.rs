@@ -169,6 +169,10 @@ impl ToolCallParser for QwenToolParser {
         self.current_tool_count = 0;
         self.in_tool_call = false;
     }
+
+    fn supports_native_tool_format(&self) -> bool {
+        true
+    }
 }
 
 /// Extract non-tool-call content from text.

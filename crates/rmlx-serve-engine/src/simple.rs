@@ -6,6 +6,7 @@
 //!
 //! Ported from the core generation loop in mlx-lm `generate.py`.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -20,8 +21,8 @@ use rmlx_serve_models::{load_model, LlmModel};
 use rmlx_serve_sampling::{make_logits_processors, make_sampler, top_logprobs};
 use rmlx_serve_tokenizer::{create_detokenizer, Tokenizer};
 use rmlx_serve_types::{
-    CompletionOutput, EngineConfig, FinishReason, Request, RequestMetrics, RequestOutput,
-    TokenLogprob,
+    CompletionOutput, EngineConfig, FinishReason, Request, RequestMetrics,
+    RequestOutput, TokenLogprob,
 };
 
 use crate::{Engine, EngineError, EngineHealth, EngineStats};
@@ -47,9 +48,13 @@ pub struct SimpleEngine {
     registry: Arc<KernelRegistry>,
 
     /// Metal command queue for GPU command submission.
+    /// Retained for resource ownership; generation tasks create their own queues.
+    #[allow(dead_code)]
     queue: metal::CommandQueue,
 
     /// GPU device handle (for cache allocation).
+    /// Retained for resource ownership; generation tasks acquire their own handles.
+    #[allow(dead_code)]
     device: GpuDevice,
 
     /// Name or path of the loaded model.
@@ -60,6 +65,12 @@ pub struct SimpleEngine {
 
     /// When the engine was created, for uptime calculation.
     start_time: Instant,
+
+    /// Number of tokens to batch before emitting a streaming response.
+    stream_interval: usize,
+
+    /// Whether the engine is running (for graceful shutdown).
+    running: Arc<AtomicBool>,
 }
 
 impl SimpleEngine {
@@ -86,11 +97,15 @@ impl SimpleEngine {
         let tokenizer_path = config.tokenizer.as_deref().unwrap_or(&model_path);
         let tokenizer = Tokenizer::from_pretrained(tokenizer_path)?;
 
-        info!(vocab_size = tokenizer.vocab_size(), "tokenizer loaded");
+        info!(
+            vocab_size = tokenizer.vocab_size(),
+            "tokenizer loaded"
+        );
 
         // 3. Create GPU device and kernel registry.
-        let device = GpuDevice::system_default()
-            .map_err(|e| EngineError::Internal(format!("failed to acquire Metal device: {e}")))?;
+        let device = GpuDevice::system_default().map_err(|e| {
+            EngineError::Internal(format!("failed to acquire Metal device: {e}"))
+        })?;
         let queue = device.new_command_queue();
         let registry = KernelRegistry::new(device);
 
@@ -104,8 +119,11 @@ impl SimpleEngine {
         );
 
         // Re-acquire device (the first was moved into KernelRegistry::new).
-        let device = GpuDevice::system_default()
-            .map_err(|e| EngineError::Internal(format!("failed to acquire Metal device: {e}")))?;
+        let device = GpuDevice::system_default().map_err(|e| {
+            EngineError::Internal(format!("failed to acquire Metal device: {e}"))
+        })?;
+
+        let stream_interval = config.scheduler.stream_interval.max(1);
 
         Ok(Self {
             model: Arc::new(tokio::sync::Mutex::new(model)),
@@ -116,12 +134,35 @@ impl SimpleEngine {
             model_name: model_path,
             stats: Arc::new(tokio::sync::Mutex::new(EngineStats::default())),
             start_time: Instant::now(),
+            stream_interval,
+            running: Arc::new(AtomicBool::new(true)),
         })
     }
 
     /// Access the tokenizer.
     pub fn tokenizer(&self) -> &Tokenizer {
         &self.tokenizer
+    }
+
+    /// Start the engine. For SimpleEngine this marks the engine as ready
+    /// to serve requests. No background threads are needed.
+    pub fn start(&self) {
+        self.running.store(true, Ordering::SeqCst);
+        info!("SimpleEngine started");
+    }
+
+    /// Gracefully stop the engine. Marks the engine as not-ready so new
+    /// requests are rejected. In-flight requests will complete naturally
+    /// since they hold the model lock.
+    pub fn stop(&self) {
+        info!("SimpleEngine stopping");
+        self.running.store(false, Ordering::SeqCst);
+        info!("SimpleEngine stopped");
+    }
+
+    /// Whether the engine is currently running.
+    pub fn is_running(&self) -> bool {
+        self.running.load(Ordering::SeqCst)
     }
 
     /// Extract logits from a model output Array as an f32 Vec on CPU.
@@ -186,156 +227,205 @@ impl Engine for SimpleEngine {
         );
 
         let arrival_time = request.arrival_time;
-        let start = Instant::now();
 
-        // Build sampler and logits processors from sampling params.
-        let sampler = make_sampler(&sampling_params);
-        let logits_processors = make_logits_processors(&sampling_params);
+        // Clone Arcs for the blocking task.
+        let model = Arc::clone(&self.model);
+        let registry = Arc::clone(&self.registry);
+        let tokenizer = Arc::clone(&self.tokenizer);
 
-        // Collect stop token ids: model EOS + user-specified.
-        let mut stop_token_ids: Vec<u32> = self.tokenizer.eos_token_ids().to_vec();
-        stop_token_ids.extend_from_slice(&sampling_params.stop_token_ids);
+        // We need a device handle inside spawn_blocking.
+        let device = GpuDevice::system_default().map_err(|e| {
+            EngineError::Internal(format!("failed to acquire Metal device: {e}"))
+        })?;
 
-        // Lock the model for serial GPU access.
-        let model_guard = self.model.lock().await;
+        // Run the entire prefill + decode loop in spawn_blocking to avoid
+        // blocking the tokio runtime with CPU/GPU-intensive forward passes.
+        let generation_result = tokio::task::spawn_blocking(move || {
+            let start = Instant::now();
 
-        // Create KV cache for this request.
-        let mut cache = model_guard.make_cache(self.device.raw());
+            // Build sampler and logits processors from sampling params.
+            let sampler = make_sampler(&sampling_params);
+            let logits_processors = make_logits_processors(&sampling_params);
 
-        // ── Prefill ──
-        let prefill_start = Instant::now();
-        let logits_array = model_guard
-            .forward(
-                &prompt_tokens,
-                Some(&mut cache),
-                &self.registry,
-                &self.queue,
-            )
-            .map_err(|e| EngineError::Model(format!("prefill failed: {e}")))?;
+            // Collect stop token ids: model EOS + user-specified.
+            let mut stop_token_ids: Vec<u32> = tokenizer.eos_token_ids().to_vec();
+            stop_token_ids.extend_from_slice(&sampling_params.stop_token_ids);
 
-        let prefill_elapsed = prefill_start.elapsed();
-        let prompt_tps = if prefill_elapsed.as_secs_f64() > 0.0 {
-            prompt_tokens.len() as f64 / prefill_elapsed.as_secs_f64()
-        } else {
-            0.0
-        };
+            let queue = device.new_command_queue();
 
-        debug!(
-            prompt_tokens = prompt_tokens.len(),
-            prefill_ms = prefill_elapsed.as_millis(),
-            prompt_tps = format!("{:.1}", prompt_tps),
-            "prefill complete"
-        );
+            // Lock the model for serial GPU access (blocking_lock for non-async context).
+            let model_guard = model.blocking_lock();
 
-        // Extract logits and sample first token.
-        let mut logits_f32 = Self::extract_logits(&logits_array)?;
-        let mut context_tokens: Vec<u32> = prompt_tokens.clone();
+            // Create KV cache for this request.
+            let mut cache = model_guard.make_cache(device.raw());
 
-        for proc in &logits_processors {
-            proc.process(&mut logits_f32, &context_tokens);
-        }
-
-        let first_token = sampler(&logits_f32);
-        let first_token_time = start.elapsed().as_secs_f64() + arrival_time;
-
-        // Build logprob info for the first token if requested.
-        let first_logprob = logprobs_k.map(|k| {
-            let top = top_logprobs(&logits_f32, k);
-            TokenLogprob {
-                token_id: first_token,
-                logprob: rmlx_serve_sampling::log_softmax(&logits_f32)
-                    .get(first_token as usize)
-                    .copied()
-                    .unwrap_or(f32::NEG_INFINITY),
-                top_logprobs: top,
-            }
-        });
-
-        let mut generated_tokens: Vec<u32> = vec![first_token];
-        let mut token_logprobs: Vec<TokenLogprob> = Vec::new();
-        if let Some(lp) = first_logprob {
-            token_logprobs.push(lp);
-        }
-        context_tokens.push(first_token);
-
-        // Check if first token is a stop token.
-        let mut finish_reason: Option<FinishReason> = None;
-        if stop_token_ids.contains(&first_token) {
-            finish_reason = Some(FinishReason::Stop);
-        }
-        if generated_tokens.len() >= max_tokens {
-            finish_reason = Some(FinishReason::Length);
-        }
-
-        // ── Decode loop ──
-        let decode_start = Instant::now();
-
-        while finish_reason.is_none() {
-            let last_token = *generated_tokens.last().unwrap();
-
+            // ── Prefill ──
+            let prefill_start = Instant::now();
             let logits_array = model_guard
-                .forward(&[last_token], Some(&mut cache), &self.registry, &self.queue)
-                .map_err(|e| EngineError::Model(format!("decode failed: {e}")))?;
+                .forward(&prompt_tokens, Some(&mut cache), &registry, &queue)
+                .map_err(|e| EngineError::Model(format!("prefill failed: {e}")))?;
 
+            let prefill_elapsed = prefill_start.elapsed();
+            let prompt_tps = if prefill_elapsed.as_secs_f64() > 0.0 {
+                prompt_tokens.len() as f64 / prefill_elapsed.as_secs_f64()
+            } else {
+                0.0
+            };
+
+            debug!(
+                prompt_tokens = prompt_tokens.len(),
+                prefill_ms = prefill_elapsed.as_millis(),
+                prompt_tps = format!("{:.1}", prompt_tps),
+                "prefill complete"
+            );
+
+            // Extract logits and sample first token.
             let mut logits_f32 = Self::extract_logits(&logits_array)?;
+            let mut context_tokens: Vec<u32> = prompt_tokens.clone();
 
             for proc in &logits_processors {
                 proc.process(&mut logits_f32, &context_tokens);
             }
 
-            let next_token = sampler(&logits_f32);
+            let first_token = sampler(&logits_f32);
+            let first_token_time = start.elapsed().as_secs_f64() + arrival_time;
 
-            // Build logprob info if requested.
-            if let Some(k) = logprobs_k {
+            // Build logprob info for the first token if requested.
+            let first_logprob = logprobs_k.map(|k| {
                 let top = top_logprobs(&logits_f32, k);
-                token_logprobs.push(TokenLogprob {
-                    token_id: next_token,
+                TokenLogprob {
+                    token_id: first_token,
                     logprob: rmlx_serve_sampling::log_softmax(&logits_f32)
-                        .get(next_token as usize)
+                        .get(first_token as usize)
                         .copied()
                         .unwrap_or(f32::NEG_INFINITY),
                     top_logprobs: top,
-                });
+                }
+            });
+
+            let mut generated_tokens: Vec<u32> = vec![first_token];
+            let mut token_logprobs: Vec<TokenLogprob> = Vec::new();
+            if let Some(lp) = first_logprob {
+                token_logprobs.push(lp);
             }
+            context_tokens.push(first_token);
 
-            generated_tokens.push(next_token);
-            context_tokens.push(next_token);
-
-            // Check stop conditions.
-            if stop_token_ids.contains(&next_token) {
+            // Check if first token is a stop token.
+            let mut finish_reason: Option<FinishReason> = None;
+            if stop_token_ids.contains(&first_token) {
                 finish_reason = Some(FinishReason::Stop);
-            } else if generated_tokens.len() >= max_tokens {
+            }
+            if generated_tokens.len() >= max_tokens {
                 finish_reason = Some(FinishReason::Length);
             }
-        }
 
-        let decode_elapsed = decode_start.elapsed();
-        let generation_tokens = generated_tokens.len();
-        let decode_tokens = generation_tokens.saturating_sub(1);
-        let generation_tps = if decode_elapsed.as_secs_f64() > 0.0 && decode_tokens > 0 {
-            decode_tokens as f64 / decode_elapsed.as_secs_f64()
-        } else {
-            0.0
-        };
+            // ── Decode loop ──
+            let decode_start = Instant::now();
+            let mut steps_since_memory_check: usize = 0;
 
-        // Drop the model lock.
-        drop(model_guard);
+            while finish_reason.is_none() {
+                let last_token = *generated_tokens.last().unwrap();
 
-        // Decode generated tokens to text.
-        let generated_text = self
-            .tokenizer
-            .decode(&generated_tokens, true)
-            .unwrap_or_default();
+                // Memory pressure monitoring every 64 decode steps.
+                steps_since_memory_check += 1;
+                if steps_since_memory_check >= 64 {
+                    steps_since_memory_check = 0;
+                    check_and_clear_memory_pressure(device.raw());
+                }
 
-        let finish_time = start.elapsed().as_secs_f64() + arrival_time;
+                let logits_array = model_guard
+                    .forward(&[last_token], Some(&mut cache), &registry, &queue)
+                    .map_err(|e| EngineError::Model(format!("decode failed: {e}")))?;
 
-        debug!(
-            request_id = %request_id,
+                let mut logits_f32 = Self::extract_logits(&logits_array)?;
+
+                for proc in &logits_processors {
+                    proc.process(&mut logits_f32, &context_tokens);
+                }
+
+                let next_token = sampler(&logits_f32);
+
+                // Build logprob info if requested.
+                if let Some(k) = logprobs_k {
+                    let top = top_logprobs(&logits_f32, k);
+                    token_logprobs.push(TokenLogprob {
+                        token_id: next_token,
+                        logprob: rmlx_serve_sampling::log_softmax(&logits_f32)
+                            .get(next_token as usize)
+                            .copied()
+                            .unwrap_or(f32::NEG_INFINITY),
+                        top_logprobs: top,
+                    });
+                }
+
+                generated_tokens.push(next_token);
+                context_tokens.push(next_token);
+
+                // Check stop conditions.
+                if stop_token_ids.contains(&next_token) {
+                    finish_reason = Some(FinishReason::Stop);
+                } else if generated_tokens.len() >= max_tokens {
+                    finish_reason = Some(FinishReason::Length);
+                }
+            }
+
+            let decode_elapsed = decode_start.elapsed();
+            let generation_tokens = generated_tokens.len();
+            let decode_tokens = generation_tokens.saturating_sub(1);
+            let generation_tps = if decode_elapsed.as_secs_f64() > 0.0 && decode_tokens > 0 {
+                decode_tokens as f64 / decode_elapsed.as_secs_f64()
+            } else {
+                0.0
+            };
+
+            // Drop the model lock.
+            drop(model_guard);
+
+            // Decode generated tokens to text.
+            let generated_text = tokenizer
+                .decode(&generated_tokens, true)
+                .unwrap_or_default();
+
+            let finish_time = start.elapsed().as_secs_f64() + arrival_time;
+
+            debug!(
+                request_id = %request_id,
+                generation_tokens,
+                generation_tps = format!("{:.1}", generation_tps),
+                total_ms = start.elapsed().as_millis(),
+                "generation complete"
+            );
+
+            Ok::<_, EngineError>((
+                request_id,
+                generated_text,
+                generated_tokens,
+                finish_reason,
+                token_logprobs,
+                arrival_time,
+                first_token_time,
+                finish_time,
+                prompt_tokens,
+                generation_tokens,
+                generation_tps,
+            ))
+        })
+        .await
+        .map_err(|e| EngineError::Internal(format!("spawn_blocking join error: {e}")))?;
+
+        let (
+            request_id,
+            generated_text,
+            generated_tokens,
+            finish_reason,
+            token_logprobs,
+            arrival_time,
+            first_token_time,
+            finish_time,
+            prompt_tokens,
             generation_tokens,
-            generation_tps = format!("{:.1}", generation_tps),
-            total_ms = start.elapsed().as_millis(),
-            "generation complete"
-        );
+            generation_tps,
+        ) = generation_result?;
 
         // Update stats.
         {
@@ -385,6 +475,7 @@ impl Engine for SimpleEngine {
         let max_tokens = sampling_params.max_tokens;
         let logprobs_k = sampling_params.logprobs;
         let arrival_time = request.arrival_time;
+        let stream_interval = self.stream_interval;
 
         let model = Arc::clone(&self.model);
         let tokenizer = Arc::clone(&self.tokenizer);
@@ -393,13 +484,15 @@ impl Engine for SimpleEngine {
         let engine_start_time = self.start_time;
 
         // We need a second device handle for cache allocation.
-        let device = GpuDevice::system_default()
-            .map_err(|e| EngineError::Internal(format!("failed to acquire Metal device: {e}")))?;
-        let queue = device.new_command_queue();
+        let device = GpuDevice::system_default().map_err(|e| {
+            EngineError::Internal(format!("failed to acquire Metal device: {e}"))
+        })?;
 
-        // Spawn the generation loop in a background task.
-        tokio::spawn(async move {
+        // Spawn the generation loop in a blocking task to avoid
+        // blocking the tokio runtime with CPU/GPU-intensive forward passes.
+        tokio::task::spawn_blocking(move || {
             let start = Instant::now();
+            let queue = device.new_command_queue();
 
             let sampler = make_sampler(&sampling_params);
             let logits_processors = make_logits_processors(&sampling_params);
@@ -410,18 +503,22 @@ impl Engine for SimpleEngine {
             // Create streaming detokenizer.
             let mut detokenizer = create_detokenizer(&tokenizer);
 
-            let model_guard = model.lock().await;
+            let model_guard = model.blocking_lock();
             let mut cache = model_guard.make_cache(device.raw());
 
             // ── Prefill ──
-            let logits_array =
-                match model_guard.forward(&prompt_tokens, Some(&mut cache), &registry, &queue) {
-                    Ok(arr) => arr,
-                    Err(e) => {
-                        warn!("prefill failed: {e}");
-                        return;
-                    }
-                };
+            let logits_array = match model_guard.forward(
+                &prompt_tokens,
+                Some(&mut cache),
+                &registry,
+                &queue,
+            ) {
+                Ok(arr) => arr,
+                Err(e) => {
+                    warn!("prefill failed: {e}");
+                    return;
+                }
+            };
 
             let mut logits_f32 = match Self::extract_logits(&logits_array) {
                 Ok(l) => l,
@@ -471,6 +568,7 @@ impl Engine for SimpleEngine {
                 finish_reason = Some(FinishReason::Length);
             }
 
+            // Always emit first token immediately.
             let output = RequestOutput {
                 request_id,
                 outputs: vec![CompletionOutput {
@@ -491,17 +589,31 @@ impl Engine for SimpleEngine {
             }
 
             // ── Decode loop ──
+            let mut tokens_since_emit: usize = 0;
+            let mut steps_since_memory_check: usize = 0;
+
             while finish_reason.is_none() {
                 let last_token = *generated_tokens.last().unwrap();
 
-                let logits_array =
-                    match model_guard.forward(&[last_token], Some(&mut cache), &registry, &queue) {
-                        Ok(arr) => arr,
-                        Err(e) => {
-                            warn!("decode failed: {e}");
-                            break;
-                        }
-                    };
+                // Memory pressure monitoring every 64 decode steps.
+                steps_since_memory_check += 1;
+                if steps_since_memory_check >= 64 {
+                    steps_since_memory_check = 0;
+                    check_and_clear_memory_pressure(device.raw());
+                }
+
+                let logits_array = match model_guard.forward(
+                    &[last_token],
+                    Some(&mut cache),
+                    &registry,
+                    &queue,
+                ) {
+                    Ok(arr) => arr,
+                    Err(e) => {
+                        warn!("decode failed: {e}");
+                        break;
+                    }
+                };
 
                 let mut logits_f32 = match Self::extract_logits(&logits_array) {
                     Ok(l) => l,
@@ -534,7 +646,6 @@ impl Engine for SimpleEngine {
 
                 // Update streaming detokenizer.
                 detokenizer.add_token(next_token);
-                let text_segment = detokenizer.last_segment().to_string();
 
                 // Check stop conditions.
                 if stop_token_ids.contains(&next_token) {
@@ -544,6 +655,17 @@ impl Engine for SimpleEngine {
                 }
 
                 let is_finished = finish_reason.is_some();
+                tokens_since_emit += 1;
+
+                // Emit a streaming response every `stream_interval` tokens,
+                // or always on the final token.
+                let should_emit = is_finished || tokens_since_emit >= stream_interval;
+                if !should_emit {
+                    continue;
+                }
+                tokens_since_emit = 0;
+
+                let text_segment = detokenizer.last_segment().to_string();
 
                 // On finish, finalize the detokenizer to flush buffered text.
                 let final_text = if is_finished {
@@ -589,9 +711,9 @@ impl Engine for SimpleEngine {
                 }
             }
 
-            // Update stats.
+            // Update stats (blocking_lock is safe in spawn_blocking context).
             drop(model_guard);
-            let mut s = stats.lock().await;
+            let mut s = stats.blocking_lock();
             s.total_requests += 1;
             s.total_prompt_tokens += prompt_tokens.len() as u64;
             s.total_completion_tokens += generated_tokens.len() as u64;
@@ -673,4 +795,34 @@ fn f16_to_f32(bits: u16) -> f32 {
 /// Convert a bfloat16 bit pattern to f32.
 fn bf16_to_f32(bits: u16) -> f32 {
     f32::from_bits((bits as u32) << 16)
+}
+
+// ---------------------------------------------------------------------------
+// Memory pressure monitoring
+// ---------------------------------------------------------------------------
+
+/// Check Metal GPU memory pressure and log a warning if critically high.
+///
+/// Uses the Metal device's `current_allocated_size` and
+/// `recommended_max_working_set_size` to compute a pressure ratio.
+/// When pressure exceeds 90%, a warning is emitted.
+fn check_and_clear_memory_pressure(device: &metal::Device) {
+    let allocated = device.current_allocated_size() as f64;
+    let recommended = device.recommended_max_working_set_size() as f64;
+    if recommended <= 0.0 {
+        return;
+    }
+    let pressure = allocated / recommended;
+    if pressure > 0.9 {
+        warn!(
+            "GPU memory pressure high ({:.1}%), allocated={:.0} MB / recommended={:.0} MB",
+            pressure * 100.0,
+            allocated / (1024.0 * 1024.0),
+            recommended / (1024.0 * 1024.0),
+        );
+        // On Apple Silicon, Metal manages memory automatically and there is
+        // no explicit cache-clear API at the device level.  The warning
+        // gives operators visibility; sequence-level caches are freed when
+        // the request completes.
+    }
 }

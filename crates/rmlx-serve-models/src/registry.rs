@@ -14,6 +14,7 @@ use rmlx_serve_weights::ModelConfig;
 use tracing::{debug, info};
 
 use crate::error::{ModelError, Result};
+use crate::rope;
 use crate::traits::LlmModel;
 use crate::transformer::TransformerLlm;
 
@@ -34,20 +35,48 @@ pub struct ModelRegistry {
 impl ModelRegistry {
     /// Create a new registry with default architecture loaders.
     ///
-    /// Registers loaders for: "llama", "qwen2", "mixtral", "deepseek_v3".
+    /// Registers loaders for all supported transformer architectures. Each
+    /// architecture maps to a shared `load_transformer_model` function
+    /// that reads config.json and dispatches to the appropriate weight
+    /// mapper in `rmlx-serve-weights`.
     pub fn new() -> Self {
         let mut registry = Self {
             loaders: HashMap::new(),
         };
 
+        // ── Llama family ─────────────────────────────────────────────
         registry.register("llama", load_transformer_model);
+
+        // ── Qwen family ──────────────────────────────────────────────
         registry.register("qwen2", load_transformer_model);
+        registry.register("qwen3", load_transformer_model);
+
+        // ── MoE architectures ────────────────────────────────────────
         registry.register("mixtral", load_transformer_model);
         registry.register("deepseek_v3", load_transformer_model);
-
-        // Common aliases
         registry.register("deepseek_v2", load_transformer_model);
+
+        // ── Mistral family ───────────────────────────────────────────
         registry.register("mistral", load_transformer_model);
+
+        // ── Gemma family ─────────────────────────────────────────────
+        registry.register("gemma", load_transformer_model);
+        registry.register("gemma2", load_transformer_model);
+        registry.register("gemma3", load_transformer_model);
+
+        // ── Phi family ───────────────────────────────────────────────
+        registry.register("phi", load_transformer_model);
+        registry.register("phi3", load_transformer_model);
+
+        // ── StarCoder ────────────────────────────────────────────────
+        registry.register("starcoder2", load_transformer_model);
+
+        // ── Cohere / Command-R ───────────────────────────────────────
+        registry.register("cohere", load_transformer_model);
+        registry.register("command-r", load_transformer_model);
+
+        // ── InternLM ─────────────────────────────────────────────────
+        registry.register("internlm2", load_transformer_model);
 
         debug!(
             architectures = ?registry.supported_types(),
@@ -138,15 +167,20 @@ fn load_transformer_model(model_path: &Path, device: GpuDevice) -> Result<Box<dy
 
     let transformer_config = model_config.to_transformer_config()?;
 
+    // Parse RoPE scaling from the HuggingFace config (if present)
+    let rope_scaling = rope::parse_rope_scaling(model_config.rope_scaling.as_ref());
+
     info!(
         model_type = model_config.model_type.as_str(),
         hidden_size = transformer_config.hidden_size,
         num_layers = transformer_config.num_layers,
         vocab_size = transformer_config.vocab_size,
+        rope_scaling = ?rope_scaling,
         "loaded transformer model"
     );
 
-    let llm = TransformerLlm::new(model, transformer_config, device)?;
+    let llm =
+        TransformerLlm::with_rope_scaling(model, transformer_config, device, rope_scaling)?;
     Ok(Box::new(llm))
 }
 

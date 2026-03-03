@@ -17,6 +17,84 @@
 use crate::tokenizer::Tokenizer;
 
 // ---------------------------------------------------------------------------
+// Thinking / Tool-call boundary detection
+// ---------------------------------------------------------------------------
+
+/// Indicates whether a special token marks the beginning or end of a
+/// thinking/reasoning section.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThinkingBoundary {
+    /// The model is entering a thinking/reasoning section.
+    Start,
+    /// The model is leaving a thinking/reasoning section.
+    End,
+}
+
+/// Indicates whether a special token marks the beginning or end of a
+/// tool-call section.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolCallBoundary {
+    /// The model is beginning a tool call.
+    Start,
+    /// The model is ending a tool call.
+    End,
+}
+
+/// Check whether a token represents a thinking/reasoning boundary.
+///
+/// Recognised patterns:
+/// - `<think>` / `</think>`
+/// - `<|begin_of_thought|>` / `<|end_of_thought|>`
+pub fn is_thinking_token(tokenizer: &tokenizers::Tokenizer, token_id: u32) -> Option<ThinkingBoundary> {
+    let token_str = tokenizer.id_to_token(token_id)?;
+    match token_str.as_str() {
+        "<think>" | "<|begin_of_thought|>" => Some(ThinkingBoundary::Start),
+        "</think>" | "<|end_of_thought|>" => Some(ThinkingBoundary::End),
+        _ => None,
+    }
+}
+
+/// Check whether a token represents a tool-call boundary.
+///
+/// Recognised patterns:
+/// - `<tool_call>` / `</tool_call>`
+/// - `<|tool_calls_begin|>` / `<|tool_calls_end|>`
+pub fn is_tool_call_token(tokenizer: &tokenizers::Tokenizer, token_id: u32) -> Option<ToolCallBoundary> {
+    let token_str = tokenizer.id_to_token(token_id)?;
+    match token_str.as_str() {
+        "<tool_call>" | "<|tool_calls_begin|>" => Some(ToolCallBoundary::Start),
+        "</tool_call>" | "<|tool_calls_end|>" => Some(ToolCallBoundary::End),
+        _ => None,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// UTF-8 helpers
+// ---------------------------------------------------------------------------
+
+/// Given a byte slice, find the boundary between a valid UTF-8 prefix and a
+/// trailing incomplete multi-byte sequence.  Returns `(valid_len, tail_len)`
+/// where `valid_len + tail_len == bytes.len()`.
+///
+/// The *tail* consists of bytes that could be the start of a multi-byte
+/// character but are not yet complete.  If the tail bytes are actually
+/// *invalid* (i.e. they can never form a valid UTF-8 character), they are
+/// still moved to the tail so the caller can re-evaluate after the next
+/// token arrives.
+fn split_valid_utf8(bytes: &[u8]) -> (usize, usize) {
+    match std::str::from_utf8(bytes) {
+        Ok(_) => (bytes.len(), 0),
+        Err(e) => {
+            let valid_up_to = e.valid_up_to();
+            // Everything after valid_up_to is either an incomplete sequence
+            // or genuinely invalid.  We hold it all back so the next token
+            // has a chance to complete it.
+            (valid_up_to, bytes.len() - valid_up_to)
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Trait
 // ---------------------------------------------------------------------------
 
@@ -47,6 +125,12 @@ pub trait StreamingDetokenizer: Send {
 
     /// Reset all internal state so the detokenizer can be reused.
     fn reset(&mut self);
+
+    /// Check whether a token represents a thinking/reasoning boundary.
+    fn is_thinking_token(&self, token_id: u32) -> Option<ThinkingBoundary>;
+
+    /// Check whether a token represents a tool-call boundary.
+    fn is_tool_call_token(&self, token_id: u32) -> Option<ToolCallBoundary>;
 }
 
 // ===========================================================================
@@ -65,6 +149,9 @@ pub struct NaiveStreamingDetokenizer {
     prev_text: String,
     /// The delta produced by the most recent `add_token` call.
     current_segment: String,
+    /// Bytes from incomplete multi-byte UTF-8 sequences held back from the
+    /// previous step.
+    pending_bytes: Vec<u8>,
 }
 
 impl NaiveStreamingDetokenizer {
@@ -74,6 +161,7 @@ impl NaiveStreamingDetokenizer {
             token_ids: Vec::new(),
             prev_text: String::new(),
             current_segment: String::new(),
+            pending_bytes: Vec::new(),
         }
     }
 }
@@ -90,12 +178,20 @@ impl StreamingDetokenizer for NaiveStreamingDetokenizer {
 
         // The new segment is whatever is beyond the previously emitted text.
         if full.len() > self.prev_text.len() {
-            self.current_segment = full[self.prev_text.len()..].to_string();
+            let raw_segment = &full[self.prev_text.len()..];
+
+            // Combine any pending bytes with the new segment bytes and
+            // split off a valid UTF-8 prefix.
+            let mut combined = std::mem::take(&mut self.pending_bytes);
+            combined.extend_from_slice(raw_segment.as_bytes());
+
+            let (valid_len, _tail_len) = split_valid_utf8(&combined);
+            self.pending_bytes = combined[valid_len..].to_vec();
+            // SAFETY: split_valid_utf8 guarantees the prefix is valid UTF-8.
+            self.current_segment =
+                unsafe { String::from_utf8_unchecked(combined[..valid_len].to_vec()) };
             self.prev_text = full;
         } else {
-            // Tokens that merge into the previous character (e.g. combining
-            // marks) can cause the new decode to be the same length or even
-            // shorter -- in that case emit nothing.
             self.current_segment.clear();
             self.prev_text = full;
         }
@@ -110,11 +206,17 @@ impl StreamingDetokenizer for NaiveStreamingDetokenizer {
             .tokenizer
             .decode(&self.token_ids, true)
             .unwrap_or_default();
-        let remaining = if full.len() > self.prev_text.len() {
+        let mut remaining = if full.len() > self.prev_text.len() {
             full[self.prev_text.len()..].to_string()
         } else {
             String::new()
         };
+        // Flush any pending bytes -- on finalize we emit whatever we have,
+        // even if incomplete (will produce replacement chars).
+        if !self.pending_bytes.is_empty() {
+            remaining.push_str(&String::from_utf8_lossy(&self.pending_bytes));
+            self.pending_bytes.clear();
+        }
         self.prev_text = full;
         self.current_segment.clear();
         remaining
@@ -124,6 +226,15 @@ impl StreamingDetokenizer for NaiveStreamingDetokenizer {
         self.token_ids.clear();
         self.prev_text.clear();
         self.current_segment.clear();
+        self.pending_bytes.clear();
+    }
+
+    fn is_thinking_token(&self, token_id: u32) -> Option<ThinkingBoundary> {
+        is_thinking_token(&self.tokenizer, token_id)
+    }
+
+    fn is_tool_call_token(&self, token_id: u32) -> Option<ToolCallBoundary> {
+        is_tool_call_token(&self.tokenizer, token_id)
     }
 }
 
@@ -151,6 +262,9 @@ pub struct SPMStreamingDetokenizer {
     first_token: bool,
     /// Replacement character used by this tokenizer (typically `▁`).
     replacement: char,
+    /// Bytes from incomplete multi-byte UTF-8 sequences held back from the
+    /// previous step.
+    pending_bytes: Vec<u8>,
 }
 
 impl SPMStreamingDetokenizer {
@@ -161,6 +275,7 @@ impl SPMStreamingDetokenizer {
             current_segment: String::new(),
             first_token: true,
             replacement,
+            pending_bytes: Vec::new(),
         }
     }
 
@@ -175,6 +290,18 @@ impl SPMStreamingDetokenizer {
         let text = self.decode_ids(&[token_id]);
         text.starts_with(self.replacement) || text.starts_with(' ')
     }
+
+    /// Decode the given raw byte output, prepend any pending bytes, split off
+    /// incomplete trailing UTF-8 and return only the valid prefix.
+    fn filter_utf8(&mut self, decoded_bytes: &[u8]) -> String {
+        let mut combined = std::mem::take(&mut self.pending_bytes);
+        combined.extend_from_slice(decoded_bytes);
+
+        let (valid_len, _tail_len) = split_valid_utf8(&combined);
+        self.pending_bytes = combined[valid_len..].to_vec();
+        // SAFETY: split_valid_utf8 guarantees the prefix is valid UTF-8.
+        unsafe { String::from_utf8_unchecked(combined[..valid_len].to_vec()) }
+    }
 }
 
 impl StreamingDetokenizer for SPMStreamingDetokenizer {
@@ -182,7 +309,8 @@ impl StreamingDetokenizer for SPMStreamingDetokenizer {
         // On word boundaries, flush the pending buffer into `current_segment`.
         if !self.first_token && self.is_boundary_token(token_id) {
             // The pending buffer now forms a complete word -- emit it.
-            self.current_segment = self.decode_ids(&self.pending_ids);
+            let decoded = self.decode_ids(&self.pending_ids);
+            self.current_segment = self.filter_utf8(decoded.as_bytes());
             self.pending_ids.clear();
         } else {
             // Not a boundary -- whatever was in current_segment has already
@@ -199,7 +327,13 @@ impl StreamingDetokenizer for SPMStreamingDetokenizer {
     }
 
     fn finalize(&mut self) -> String {
-        let remaining = self.decode_ids(&self.pending_ids);
+        let decoded = self.decode_ids(&self.pending_ids);
+        let mut remaining = self.filter_utf8(decoded.as_bytes());
+        // Flush any leftover pending bytes on finalize.
+        if !self.pending_bytes.is_empty() {
+            remaining.push_str(&String::from_utf8_lossy(&self.pending_bytes));
+            self.pending_bytes.clear();
+        }
         self.pending_ids.clear();
         self.current_segment.clear();
         self.first_token = true;
@@ -210,6 +344,15 @@ impl StreamingDetokenizer for SPMStreamingDetokenizer {
         self.pending_ids.clear();
         self.current_segment.clear();
         self.first_token = true;
+        self.pending_bytes.clear();
+    }
+
+    fn is_thinking_token(&self, token_id: u32) -> Option<ThinkingBoundary> {
+        is_thinking_token(&self.tokenizer, token_id)
+    }
+
+    fn is_tool_call_token(&self, token_id: u32) -> Option<ToolCallBoundary> {
+        is_tool_call_token(&self.tokenizer, token_id)
     }
 }
 
@@ -230,6 +373,9 @@ pub struct BPEStreamingDetokenizer {
     current_segment: String,
     /// Whether we have received the very first token.
     first_token: bool,
+    /// Bytes from incomplete multi-byte UTF-8 sequences held back from the
+    /// previous step.
+    pending_bytes: Vec<u8>,
 }
 
 impl BPEStreamingDetokenizer {
@@ -242,6 +388,7 @@ impl BPEStreamingDetokenizer {
             pending_ids: Vec::new(),
             current_segment: String::new(),
             first_token: true,
+            pending_bytes: Vec::new(),
         }
     }
 
@@ -259,12 +406,25 @@ impl BPEStreamingDetokenizer {
             false
         }
     }
+
+    /// Decode the given raw byte output, prepend any pending bytes, split off
+    /// incomplete trailing UTF-8 and return only the valid prefix.
+    fn filter_utf8(&mut self, decoded_bytes: &[u8]) -> String {
+        let mut combined = std::mem::take(&mut self.pending_bytes);
+        combined.extend_from_slice(decoded_bytes);
+
+        let (valid_len, _tail_len) = split_valid_utf8(&combined);
+        self.pending_bytes = combined[valid_len..].to_vec();
+        // SAFETY: split_valid_utf8 guarantees the prefix is valid UTF-8.
+        unsafe { String::from_utf8_unchecked(combined[..valid_len].to_vec()) }
+    }
 }
 
 impl StreamingDetokenizer for BPEStreamingDetokenizer {
     fn add_token(&mut self, token_id: u32) {
         if !self.first_token && self.is_boundary_token(token_id) {
-            self.current_segment = self.decode_ids(&self.pending_ids);
+            let decoded = self.decode_ids(&self.pending_ids);
+            self.current_segment = self.filter_utf8(decoded.as_bytes());
             self.pending_ids.clear();
         } else {
             self.current_segment.clear();
@@ -279,7 +439,13 @@ impl StreamingDetokenizer for BPEStreamingDetokenizer {
     }
 
     fn finalize(&mut self) -> String {
-        let remaining = self.decode_ids(&self.pending_ids);
+        let decoded = self.decode_ids(&self.pending_ids);
+        let mut remaining = self.filter_utf8(decoded.as_bytes());
+        // Flush any leftover pending bytes on finalize.
+        if !self.pending_bytes.is_empty() {
+            remaining.push_str(&String::from_utf8_lossy(&self.pending_bytes));
+            self.pending_bytes.clear();
+        }
         self.pending_ids.clear();
         self.current_segment.clear();
         self.first_token = true;
@@ -290,6 +456,15 @@ impl StreamingDetokenizer for BPEStreamingDetokenizer {
         self.pending_ids.clear();
         self.current_segment.clear();
         self.first_token = true;
+        self.pending_bytes.clear();
+    }
+
+    fn is_thinking_token(&self, token_id: u32) -> Option<ThinkingBoundary> {
+        is_thinking_token(&self.tokenizer, token_id)
+    }
+
+    fn is_tool_call_token(&self, token_id: u32) -> Option<ToolCallBoundary> {
+        is_tool_call_token(&self.tokenizer, token_id)
     }
 }
 

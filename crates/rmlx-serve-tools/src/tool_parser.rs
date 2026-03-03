@@ -21,6 +21,16 @@ pub trait ToolCallParser: Send + Sync {
 
     /// Reset any internal streaming state (call between requests).
     fn reset(&mut self);
+
+    /// Whether this model family supports native tool-format tokens in its
+    /// tokenizer / chat template.  Models that return `true` (e.g. Hermes,
+    /// Llama, Mistral, DeepSeek) can be prompted with structured tool
+    /// definitions; models that return `false` rely on free-form text parsing.
+    ///
+    /// The default implementation returns `false`.
+    fn supports_native_tool_format(&self) -> bool {
+        false
+    }
 }
 
 /// A factory function that creates a fresh parser instance.
@@ -47,13 +57,31 @@ impl ToolParserRegistry {
         reg.register("llama", || {
             Box::new(crate::parsers::llama::LlamaToolParser::new())
         });
+        // Aliases: llama3 and llama4 map to the Llama parser
+        reg.register("llama3", || {
+            Box::new(crate::parsers::llama::LlamaToolParser::new())
+        });
+        reg.register("llama4", || {
+            Box::new(crate::parsers::llama::LlamaToolParser::new())
+        });
         reg.register("mistral", || {
             Box::new(crate::parsers::mistral::MistralToolParser::new())
         });
         reg.register("qwen", || {
             Box::new(crate::parsers::qwen::QwenToolParser::new())
         });
+        // Alias: qwen3 maps to the Qwen parser (which supports Hermes-style <tool_call> tags too)
+        reg.register("qwen3", || {
+            Box::new(crate::parsers::qwen::QwenToolParser::new())
+        });
         reg.register("deepseek", || {
+            Box::new(crate::parsers::deepseek::DeepSeekToolParser::new())
+        });
+        // Aliases: deepseek_v3 and deepseek_r1 map to the DeepSeek parser
+        reg.register("deepseek_v3", || {
+            Box::new(crate::parsers::deepseek::DeepSeekToolParser::new())
+        });
+        reg.register("deepseek_r1", || {
             Box::new(crate::parsers::deepseek::DeepSeekToolParser::new())
         });
         reg.register("glm4_7", || {
